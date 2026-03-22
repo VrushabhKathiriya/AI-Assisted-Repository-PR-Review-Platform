@@ -32,16 +32,6 @@ const repositorySchema = new Schema(
       default: "private"
     },
 
-    // rules: {
-    // type: Map,
-    // of: Schema.Types.Mixed,
-    // default: () => new Map([
-    //   ["minCommitMessageLength", 5],
-    //   ["disallowTodo", false],
-    //   ["disallowConsoleLog", false]
-    // ])
-    // }
-
     rules: {
     type: Schema.Types.Mixed,
     default: {
