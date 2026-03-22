@@ -2,11 +2,12 @@ import { Repository } from "../models/repository.model.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
+import { allowedRules } from "../utils/allowedRules.js";
 
 /* ================= CREATE REPOSITORY ================= */
 
 export const createRepository = asyncHandler(async (req, res) => {
-  const { name, description, visibility, rules } = req.body;
+  const { name, description, visibility } = req.body;
 
   if (!name || !name.trim()) {
     throw new ApiError(400, "Repository name is required");
@@ -25,7 +26,7 @@ export const createRepository = asyncHandler(async (req, res) => {
     name: name.trim(),
     description,
     visibility,
-    rules,
+    rules:{},
     owner: req.user._id
   });
 
@@ -430,6 +431,21 @@ export const updateRepository = asyncHandler(async (req, res) => {
     for (const { rule, value } of rulesToAdd) {
       if (!rule) throw new ApiError(400, "Rule name is required");
 
+       /* ✅ Check Allowed Rule */
+      if (!allowedRules[rule]) {
+          throw new ApiError(400, `Rule '${rule}' is not supported`);
+      }
+
+      /* ✅ Type Validation */
+      const expectedType = allowedRules[rule].type;
+      if (typeof value !== expectedType) {
+          throw new ApiError(
+            400,
+            `Invalid type for '${rule}', expected ${expectedType}`
+          );
+      }
+
+
       // Check if rule already exists in the plain object
       if (repository.rules && repository.rules[rule] !== undefined) {
         throw new ApiError(400, `Rule '${rule}' already exists`);
@@ -441,10 +457,32 @@ export const updateRepository = asyncHandler(async (req, res) => {
   /* ---------- RULES: UPDATE ---------- */
   if (rulesToUpdate && Array.isArray(rulesToUpdate)) {
     for (const { rule, value } of rulesToUpdate) {
+
+      if (!allowedRules[rule]) {
+          throw new ApiError(400, `Rule '${rule}' is not supported`);
+      }
+
+      const expectedType = allowedRules[rule].type;
+        if (typeof value !== expectedType) {
+          throw new ApiError(
+            400,
+            `Invalid type for '${rule}', expected ${expectedType}`
+          );
+        }
+
       if (!repository.rules || repository.rules[rule] === undefined) {
         throw new ApiError(400, `Rule '${rule}' does not exist and cannot be updated`);
       }
-      setFields[`rules.${rule}`] = value;
+       
+      /* 🔥 CORE FIX */
+        if (value === false) {
+          unsetFields[`rules.${rule}`] = "";
+         } else {
+          setFields[`rules.${rule}`] = value;
+        }
+
+      
+      
     }
   }
 
@@ -455,6 +493,7 @@ export const updateRepository = asyncHandler(async (req, res) => {
         throw new ApiError(400, `Rule '${rule}' does not exist and cannot be removed`);
       }
       unsetFields[`rules.${rule}`] = "";
+      
     }
   }
 
@@ -510,4 +549,40 @@ export const deleteRepository = asyncHandler(async (req, res) => {
     )
   );
 
+});
+
+/* ================= GET REPO RULES ================= */
+export const getRepositoryRules = asyncHandler(async (req, res) => {
+  const { repoId } = req.params;
+
+  const repository = await Repository.findById(repoId);
+
+  if (!repository) {
+    throw new ApiError(404, "Repository not found");
+  }
+
+  /* ---------- ACCESS CONTROL ---------- */
+  const isOwner =
+    repository.owner.toString() === req.user._id.toString();
+
+  const isContributor = repository.contributors.some(
+    (c) => c.toString() === req.user._id.toString()
+  );
+
+  const isPublic = repository.visibility === "public";
+
+  if (!isOwner && !isContributor && !isPublic) {
+    throw new ApiError(403, "Access denied");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        allowedRules,
+        activeRules: repository.rules || {}
+      },
+      "Repository rules fetched successfully"
+    )
+  );
 });

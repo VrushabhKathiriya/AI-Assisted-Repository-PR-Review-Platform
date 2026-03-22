@@ -35,9 +35,9 @@ const repositorySchema = new Schema(
     rules: {
     type: Schema.Types.Mixed,
     default: {
-      minCommitMessageLength: 5,
-      disallowTodo: false,
-      disallowConsoleLog: false
+      // minCommitMessageLength: 5,
+      // disallowTodo: false,
+      // disallowConsoleLog: false
       }
     }
   },

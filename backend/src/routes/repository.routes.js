@@ -7,7 +7,8 @@ import {
   getRepositories,
   getRepositoryById,
   updateRepository,
-  deleteRepository
+  deleteRepository,
+  getRepositoryRules
 } from "../controllers/repository.controller.js";
 
 const router = express.Router();
@@ -31,5 +32,9 @@ router.patch("/:repoId", verifyJWT, updateRepository);
 /* ---------- DELETE REPOSITORY ---------- */
 
 router.delete("/:repoId", verifyJWT, deleteRepository);
+
+/* ---------- GET REPO RULES ---------- */
+
+router.get("/:repoId/rules", verifyJWT, getRepositoryRules);
 
 export default router;
