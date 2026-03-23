@@ -1,36 +1,37 @@
-import { User } from "../models/user.model.js";
 import jwt from "jsonwebtoken";
-import crypto from "crypto";
+import { User } from "../models/user.model.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
-import { generateOtp } from "../utils/generateOtp.js";
+import crypto from "crypto";
 import { sendOtpEmail } from "../utils/email.js";
 import { sendPhoneOtp } from "../utils/sms.js";
 import { sendResetPasswordEmail } from "../utils/email.js";
+import { generateOtp } from "../utils/generateOtp.js";
 
-
+/* ================= TOKEN UTILS ================= */
 const generateAccessAndRefreshTokens = async (userId) => {
-    try {
-        const user = await User.findById(userId);
-        if (!user) throw new ApiError(404, "User not found");
+  try {
+    const user = await User.findById(userId);
+    if (!user) throw new ApiError(404, "User not found");
 
-        const accessToken = user.generateAccessToken();
-        const refreshToken = user.generateRefreshToken();
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
 
-        user.refreshToken = refreshToken;
-        await user.save({ validateBeforeSave: false });
+    user.refreshToken = refreshToken;
+    await user.save({ validateBeforeSave: false });
 
-        return { accessToken, refreshToken };
-    } catch (error) {
-        throw new ApiError(500, error.message);
-    }
+    return { accessToken, refreshToken };
+  } catch (error) {
+    throw new ApiError(500, error.message);
+  }
 };
 
 /* ================= REGISTER ================= */
 export const registerUser = asyncHandler(async (req, res) => {
   let { fullName, username, email, phone, password } = req.body;
 
+  /* ---------- VALIDATION ---------- */
   if (!fullName || !username || !password) {
     throw new ApiError(400, "Full name, username, and password are required");
   }
@@ -39,24 +40,59 @@ export const registerUser = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Email or phone number is required");
   }
 
+  email = email ? email.toLowerCase().trim() : undefined;
   username = username.toLowerCase().trim();
 
-  const existingUser = await User.findOne({
-    $or: [{ email }, { phone }]
+  /* ---------- CHECK VERIFIED USERS ---------- */
+  const verifiedUsernameExists = await User.findOne({
+    username,
+    isVerified: true
   });
-
-  if (existingUser) {
-    throw new ApiError(409, "User already exists with this email or phone");
+  if (verifiedUsernameExists) {
+    throw new ApiError(409, "Username already taken");
   }
 
+  if (email) {
+    const verifiedEmailExists = await User.findOne({
+      email,
+      isVerified: true
+    });
+    if (verifiedEmailExists) {
+      throw new ApiError(409, "Email already registered");
+    }
+  }
+
+  if (phone) {
+    const verifiedPhoneExists = await User.findOne({
+      phone,
+      isPhoneVerified: true
+    });
+    if (verifiedPhoneExists) {
+      throw new ApiError(409, "Phone already registered");
+    }
+  }
+
+  /* ---------- DELETE OLD UNVERIFIED ACCOUNTS ---------- */
+  /* Handles case where user registered before with wrong email/phone */
+  await User.deleteMany({
+    isVerified: false,
+    $or: [
+      { username },
+      ...(email ? [{ email }] : []),
+      ...(phone ? [{ phone }] : [])
+    ]
+  });
+
+  /* ---------- GENERATE OTP ---------- */
   const otp = generateOtp();
   const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
-  const newUser = await User.create({
+  /* ---------- CREATE UNVERIFIED USER ---------- */
+  await User.create({
     fullName,
     username,
-    email,
-    phone,
+    email: email || undefined,
+    phone: phone || undefined,
     password,
     authProvider: email ? "email" : "phone",
     emailOtp: email ? otp : undefined,
@@ -65,86 +101,122 @@ export const registerUser = asyncHandler(async (req, res) => {
     phoneOtpExpiry: phone ? otpExpiry : undefined
   });
 
+  /* ---------- SEND OTP ---------- */
   try {
-    if (email) {
-      await sendOtpEmail(email, otp);
-    }
-
-    if (phone) {
-      await sendPhoneOtp(phone, otp);
-    }
+    if (email) await sendOtpEmail(email, otp);
+    if (phone) await sendPhoneOtp(phone, otp);
   } catch (error) {
-    console.error("OTP sending failed:", error.message);
+    // Clean up if OTP sending fails
+    await User.deleteOne({
+      username,
+      isVerified: false
+    });
+    throw new ApiError(500, "Failed to send OTP. Please try again.");
   }
 
-  res.status(201).json(
+  return res.status(201).json(
     new ApiResponse(201, null, "OTP sent for verification")
   );
 });
 
 /* ================= VERIFY OTP ================= */
-
 export const verifyOtp = asyncHandler(async (req, res) => {
   const { email, phone, otp } = req.body;
 
   if (!otp) throw new ApiError(400, "OTP is required");
 
+  if (!email && !phone) {
+    throw new ApiError(400, "Email or phone is required");
+  }
+
+  /* ---------- FIND UNVERIFIED USER ---------- */
   const user = await User.findOne({
-    $or: [{ email }, { phone }]
+    $or: [
+      ...(email ? [{ email }] : []),
+      ...(phone ? [{ phone }] : [])
+    ]
   });
 
-  if (!user) throw new ApiError(404, "User not found");
+  if (!user) {
+    throw new ApiError(
+      404,
+      "No pending registration found. Please register again."
+    );
+  }
 
+  if (user.isVerified) {
+    throw new ApiError(400, "Account already verified. Please login.");
+  }
+
+  /* ---------- VALIDATE OTP ---------- */
   const isEmailFlow = !!email;
 
-  if (
-    (isEmailFlow && (user.emailOtp !== otp || user.emailOtpExpiry < Date.now())) ||
-    (!isEmailFlow && (user.phoneOtp !== otp || user.phoneOtpExpiry < Date.now()))
-  ) {
-    throw new ApiError(400, "Invalid or expired OTP");
-  }
-
   if (isEmailFlow) {
+    if (user.emailOtp !== otp) {
+      throw new ApiError(400, "Invalid OTP");
+    }
+    if (user.emailOtpExpiry < new Date()) {
+      await user.deleteOne();
+      throw new ApiError(
+        400,
+        "OTP expired. Please register again."
+      );
+    }
+
+    /* ---------- VERIFY EMAIL ---------- */
     user.isVerified = true;
+    user.emailOtp = undefined;
+    user.emailOtpExpiry = undefined;
+
   } else {
+    if (user.phoneOtp !== otp) {
+      throw new ApiError(400, "Invalid OTP");
+    }
+    if (user.phoneOtpExpiry < new Date()) {
+      await user.deleteOne();
+      throw new ApiError(
+        400,
+        "OTP expired. Please register again."
+      );
+    }
+
+    /* ---------- VERIFY PHONE ---------- */
     user.isPhoneVerified = true;
+    user.phoneOtp = undefined;
+    user.phoneOtpExpiry = undefined;
   }
-
-  user.emailOtp = undefined;
-  user.phoneOtp = undefined;
-
-  user.emailOtpExpiry = undefined;
-  user.phoneOtpExpiry = undefined;
 
   await user.save();
 
-  res.status(200).json(
-    new ApiResponse(200, null, "User verified successfully")
+  return res.status(200).json(
+    new ApiResponse(200, null, "Account verified successfully. Please login.")
   );
 });
 
 /* ================= LOGIN ================= */
 export const loginUser = asyncHandler(async (req, res) => {
-  const { email, phone, password } = req.body;
+  const { email, phone, password } = req.body || {};
 
   if (!(email || phone) || !password) {
     throw new ApiError(400, "Credentials required");
   }
 
   const user = await User.findOne({
-    $or: [{ email }, { phone }]
+    $or: [
+      ...(email ? [{ email }] : []),
+      ...(phone ? [{ phone }] : [])
+    ]
   });
 
   if (!user) {
     throw new ApiError(404, "User not found");
   }
 
-  if (!user.isVerified) {
+  if (!user.isVerified && !user.isPhoneVerified) {
     throw new ApiError(401, "Please verify your account first");
   }
 
   const isValid = await user.isPasswordCorrect(password);
-
   if (!isValid) {
     throw new ApiError(401, "Invalid credentials");
   }
@@ -161,13 +233,14 @@ export const loginUser = asyncHandler(async (req, res) => {
     sameSite: "strict"
   };
 
-  res
+  return res
+    .status(200)
     .cookie("accessToken", accessToken, cookieOptions)
     .cookie("refreshToken", refreshToken, cookieOptions)
     .json(
       new ApiResponse(
         200,
-        { user: loggedInUser },
+        { user: loggedInUser, accessToken },
         "Login successful"
       )
     );
@@ -175,16 +248,9 @@ export const loginUser = asyncHandler(async (req, res) => {
 
 /* ================= LOGOUT ================= */
 export const logoutUser = asyncHandler(async (req, res) => {
-  if (!req.user?._id) {
-    throw new ApiError(401, "Unauthorized request");
-  }
-
-
   await User.findByIdAndUpdate(
     req.user._id,
-    {
-      $unset: { refreshToken: 1 }
-    },
+    { $unset: { refreshToken: 1 } },
     { new: true }
   );
 
@@ -198,9 +264,7 @@ export const logoutUser = asyncHandler(async (req, res) => {
     .status(200)
     .clearCookie("accessToken", cookieOptions)
     .clearCookie("refreshToken", cookieOptions)
-    .json(
-      new ApiResponse(200, {}, "User logged out successfully")
-    );
+    .json(new ApiResponse(200, {}, "User logged out successfully"));
 });
 
 /* ================= REFRESH ACCESS TOKEN ================= */
@@ -213,7 +277,6 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
   }
 
   let decoded;
-
   try {
     decoded = jwt.verify(
       incomingRefreshToken,
@@ -224,10 +287,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findById(decoded._id);
-
-  if (!user) {
-    throw new ApiError(404, "User not found");
-  }
+  if (!user) throw new ApiError(404, "User not found");
 
   if (user.refreshToken !== incomingRefreshToken) {
     throw new ApiError(401, "Refresh token mismatch");
@@ -256,23 +316,17 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
 });
 
 /* ================= CURRENT USER ================= */
-
 export const getCurrentUser = asyncHandler(async (req, res) => {
   if (!req.user) {
     throw new ApiError(401, "Unauthorized request");
   }
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      req.user,
-      "User fetched successfully"
-    )
+  return res.status(200).json(
+    new ApiResponse(200, req.user, "User fetched successfully")
   );
 });
 
 /* ================= CHANGE PASSWORD ================= */
-
 export const changeCurrentPassword = asyncHandler(async (req, res) => {
   const { oldPassword, newPassword } = req.body || {};
 
@@ -281,32 +335,20 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findById(req.user._id);
-
-  if (!user) {
-    throw new ApiError(404, "User not found");
-  }
+  if (!user) throw new ApiError(404, "User not found");
 
   const isMatch = await user.isPasswordCorrect(oldPassword);
-
-  if (!isMatch) {
-    throw new ApiError(400, "Invalid old password");
-  }
+  if (!isMatch) throw new ApiError(400, "Invalid old password");
 
   user.password = newPassword;
-
   await user.save();
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      {},
-      "Password changed successfully"
-    )
+  return res.status(200).json(
+    new ApiResponse(200, {}, "Password changed successfully")
   );
 });
 
 /* ================= UPDATE PROFILE ================= */
-
 export const updateAccountDetails = asyncHandler(async (req, res) => {
   const { fullName, email, phone } = req.body || {};
 
@@ -317,16 +359,22 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
   const updateData = { fullName };
 
   if (email) {
-    const existingEmail = await User.findOne({ email });
-    if (existingEmail && existingEmail._id.toString() !== req.user._id.toString()) {
+    const existingEmail = await User.findOne({ email, isVerified: true });
+    if (
+      existingEmail &&
+      existingEmail._id.toString() !== req.user._id.toString()
+    ) {
       throw new ApiError(409, "Email already in use");
     }
     updateData.email = email.toLowerCase().trim();
   }
 
   if (phone) {
-    const existingPhone = await User.findOne({ phone });
-    if (existingPhone && existingPhone._id.toString() !== req.user._id.toString()) {
+    const existingPhone = await User.findOne({ phone, isPhoneVerified: true });
+    if (
+      existingPhone &&
+      existingPhone._id.toString() !== req.user._id.toString()
+    ) {
       throw new ApiError(409, "Phone already in use");
     }
     updateData.phone = phone;
@@ -338,17 +386,12 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
     { new: true }
   ).select("-password -refreshToken");
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      user,
-      "Account updated successfully"
-    )
+  return res.status(200).json(
+    new ApiResponse(200, user, "Account updated successfully")
   );
 });
 
 /* ================= FORGOT PASSWORD ================= */
-
 export const forgotPassword = asyncHandler(async (req, res) => {
   const { email, phone } = req.body;
 
@@ -357,14 +400,14 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findOne({
-    $or: [{ email }, { phone }]
+    $or: [
+      ...(email ? [{ email }] : []),
+      ...(phone ? [{ phone }] : [])
+    ]
   });
 
-  if (!user) {
-    throw new ApiError(404, "User not found");
-  }
+  if (!user) throw new ApiError(404, "User not found");
 
-  // Email Reset Flow
   if (email) {
     const resetToken = user.generateResetPasswordToken();
     await user.save({ validateBeforeSave: false });
@@ -378,7 +421,6 @@ export const forgotPassword = asyncHandler(async (req, res) => {
     }
   }
 
-  // Phone Reset Flow (OTP)
   if (phone) {
     const otp = generateOtp();
     user.phoneOtp = otp;
@@ -392,17 +434,12 @@ export const forgotPassword = asyncHandler(async (req, res) => {
     }
   }
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      null,
-      "Password reset instructions sent"
-    )
+  return res.status(200).json(
+    new ApiResponse(200, null, "Password reset instructions sent")
   );
 });
 
 /* ================= RESET PASSWORD ================= */
-
 export const resetPassword = asyncHandler(async (req, res) => {
   const { token } = req.params;
   const { newPassword } = req.body;
@@ -432,11 +469,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
 
   await user.save();
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      null,
-      "Password reset successful"
-    )
+  return res.status(200).json(
+    new ApiResponse(200, null, "Password reset successful")
   );
 });
