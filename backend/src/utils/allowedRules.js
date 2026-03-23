@@ -10,5 +10,13 @@ export const allowedRules = {
   disallowConsoleLog: {
     type: "boolean",
     default: false
+  },
+  disallowVar: {
+    type: "boolean",
+    default: false
+  },
+  disallowDebugger: {
+    type: "boolean",
+    default: false
   }
 };

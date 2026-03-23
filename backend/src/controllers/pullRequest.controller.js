@@ -1,6 +1,7 @@
 import { PullRequest } from "../models/pullRequest.model.js";
 import { File } from "../models/file.model.js";
 import { Repository } from "../models/repository.model.js";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -18,6 +19,117 @@ const ruleHandlers = {
   disallowConsoleLog: (value, { content }) => {
     if (value && content.includes("console.log"))
       return "console.log is not allowed";
+  },
+
+  disallowVar: (value, { content }) => {
+    if (value && /\bvar\b/.test(content))
+      return "var keyword is not allowed, use let or const";
+  },
+
+  requireIssueLink: (value, { message }) => {
+    if (value && !message.includes("#"))
+      return "Commit message must reference an issue (e.g. #123)";
+  },
+
+  maxFileLines: (value, { content }) => {
+    const lines = content.split("\n").length;
+    if (lines > value)
+      return `File exceeds maximum allowed lines (${value})`;
+  },
+
+  disallowDebugger: (value, { content }) => {
+    if (value && content.includes("debugger"))
+      return "debugger statement is not allowed";
+  }
+};
+
+/* ---------- AI REVIEW FUNCTION ---------- */
+const getAIReview = async ({ content, message, ruleIssues, previousContent }) => {
+  try {
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+    const previousContentSection = previousContent
+      ? `Previous file content:\n${previousContent}`
+      : "No previous version available.";
+
+    const ruleIssuesSection =
+      ruleIssues.length > 0
+        ? `Rule violations found:\n${ruleIssues.join("\n")}`
+        : "No rule violations found.";
+
+    const prompt = `
+You are a senior software engineer performing a code review on a pull request.
+
+Analyze the following PR and respond ONLY in this exact JSON format with no extra text or markdown backticks:
+
+{
+  "summary": "One sentence describing what this PR does",
+  "status": "good or bad",
+  "issues": [
+    {
+      "type": "critical or warning or suggestion",
+      "issue": "What is wrong",
+      "why": "Why it is a problem",
+      "fix": "How to fix it"
+    }
+  ],
+  "improvements": ["optional improvement 1", "optional improvement 2"],
+  "commitMessageFeedback": "Feedback on the commit message quality"
+}
+
+Rules:
+- status is "bad" if there are any critical or warning issues, otherwise "good"
+- issues array can be empty if code is clean
+- improvements are optional enhancements even for good code
+- Be specific, practical, and concise
+- Detect issues beyond just rule violations:
+  * Bad variable names
+  * Missing error handling
+  * Security vulnerabilities
+  * Inefficient code
+  * Poor structure
+
+PR Details:
+Commit message: "${message}"
+${ruleIssuesSection}
+${previousContentSection}
+
+New code submitted:
+${content}
+    `;
+
+    const result = await model.generateContent(prompt);
+    const rawText = result.response.text();
+
+    // Strip markdown code fences if present
+    const clean = rawText.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+
+    return {
+      status: parsed.status || "good",
+      summary: parsed.summary || "",
+      issues: parsed.issues || [],
+      improvements: parsed.improvements || [],
+      commitMessageFeedback: parsed.commitMessageFeedback || ""
+    };
+
+  } catch (error) {
+    console.error("AI Review failed:", error.message);
+
+    // Fallback if AI fails
+    return {
+      status: ruleIssues.length > 0 ? "bad" : "good",
+      summary: "AI review unavailable",
+      issues: ruleIssues.map((issue) => ({
+        type: "warning",
+        issue,
+        why: "Violates repository rule",
+        fix: `Fix: ${issue}`
+      })),
+      improvements: [],
+      commitMessageFeedback: ""
+    };
   }
 };
 
@@ -74,7 +186,7 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     );
   }
 
-  /* ---------- PREVENT SAME CONTENT AS LAST PR (accepted or rejected) ---------- */
+  /* ---------- PREVENT SAME CONTENT AS LAST PR ---------- */
   const lastPR = await PullRequest.findOne(
     { file: fileId },
     {},
@@ -115,20 +227,13 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     issues
   };
 
-  /* ---------- AI LAYER ---------- */
-  let aiResult = {
-    status: "good",
-    suggestions: ["Code meets repository rules"],
-    explanation: "No issues detected"
-  };
-
-  if (!ruleResult.passed) {
-    aiResult = {
-      status: "bad",
-      suggestions: ruleResult.issues.map((issue) => `Fix: ${issue}`),
-      explanation: "Code violates repository rules"
-    };
-  }
+  /* ---------- AI REVIEW ---------- */
+  const aiResult = await getAIReview({
+    content,
+    message,
+    ruleIssues: issues,
+    previousContent: file.content || null
+  });
 
   /* ---------- CREATE PR ---------- */
   const pr = await PullRequest.create({
@@ -145,6 +250,7 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     .status(201)
     .json(new ApiResponse(201, pr, "Pull request created successfully"));
 });
+
 /* ================= REVIEW PR ================= */
 export const reviewPullRequest = asyncHandler(async (req, res) => {
   const { prId } = req.params;
@@ -162,6 +268,7 @@ export const reviewPullRequest = asyncHandler(async (req, res) => {
   }
 
   const repo = await Repository.findById(pr.repository);
+  if (!repo) throw new ApiError(404, "Repository not found");
 
   if (repo.owner.toString() !== req.user._id.toString()) {
     throw new ApiError(403, "Only owner can review PR");
@@ -178,10 +285,8 @@ export const reviewPullRequest = asyncHandler(async (req, res) => {
       updatedBy: pr.createdBy
     });
 
-    file.content = pr.newContent; // 🔥 IMPORTANT (latest content update)
-
+    file.content = pr.newContent;
     await file.save();
-
     pr.status = "accepted";
   }
 
@@ -192,7 +297,6 @@ export const reviewPullRequest = asyncHandler(async (req, res) => {
 
   pr.reviewedBy = req.user._id;
   pr.reviewedAt = new Date();
-
   await pr.save();
 
   return res

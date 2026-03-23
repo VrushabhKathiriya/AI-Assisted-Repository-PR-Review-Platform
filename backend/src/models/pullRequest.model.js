@@ -16,6 +16,27 @@ const ruleResultSchema = new Schema(
   { _id: false }
 );
 
+/* ---------- AI ISSUE SUB-SCHEMA ---------- */
+const aiIssueSchema = new Schema(
+  {
+    type: {
+      type: String,
+      enum: ["critical", "warning", "suggestion"],
+      required: true
+    },
+    issue: {
+      type: String
+    },
+    why: {
+      type: String
+    },
+    fix: {
+      type: String
+    }
+  },
+  { _id: false }
+);
+
 /* ---------- AI RESULT SUB-SCHEMA ---------- */
 const aiResultSchema = new Schema(
   {
@@ -24,12 +45,16 @@ const aiResultSchema = new Schema(
       enum: ["good", "bad"],
       required: true
     },
-    suggestions: [
+    summary: {
+      type: String
+    },
+    issues: [aiIssueSchema],
+    improvements: [
       {
         type: String
       }
     ],
-    explanation: {
+    commitMessageFeedback: {
       type: String
     }
   },
@@ -89,7 +114,6 @@ const pullRequestSchema = new Schema(
       ref: "User"
     },
 
-    /* 🔥 NEW FIELD */
     reviewedAt: {
       type: Date
     }
