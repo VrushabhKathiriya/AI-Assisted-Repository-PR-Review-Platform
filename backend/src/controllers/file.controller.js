@@ -1,5 +1,6 @@
 import { File } from "../models/file.model.js";
 import { Repository } from "../models/repository.model.js";
+import { PullRequest } from "../models/pullRequest.model.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -166,8 +167,8 @@ export const deleteFile = asyncHandler(async (req, res) => {
   if (!isOwner) {
     throw new ApiError(403, "Only owner can delete file");
   }
-
-  await file.deleteOne();
+  await PullRequest.deleteMany({ file: fileId });
+  await File.findByIdAndDelete(fileId)
 
   return res
     .status(200)

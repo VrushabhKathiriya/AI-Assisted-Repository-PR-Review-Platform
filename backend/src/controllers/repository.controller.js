@@ -1,8 +1,11 @@
 import { Repository } from "../models/repository.model.js";
+import { File } from "../models/file.model.js";
+import { PullRequest } from "../models/pullRequest.model.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { allowedRules } from "../utils/allowedRules.js";
+
 
 /* ================= CREATE REPOSITORY ================= */
 
@@ -521,7 +524,6 @@ export const updateRepository = asyncHandler(async (req, res) => {
 /* ================= DELETE REPOSITORY ================= */
 
 export const deleteRepository = asyncHandler(async (req, res) => {
-
   const { repoId } = req.params;
 
   const repository = await Repository.findById(repoId);
@@ -531,7 +533,6 @@ export const deleteRepository = asyncHandler(async (req, res) => {
   }
 
   /* ---------- OWNER PERMISSION CHECK ---------- */
-
   if (repository.owner.toString() !== req.user._id.toString()) {
     throw new ApiError(
       403,
@@ -539,16 +540,23 @@ export const deleteRepository = asyncHandler(async (req, res) => {
     );
   }
 
-  await repository.deleteOne();
 
-  return res.status(200).json(
-    new ApiResponse(
-      200,
-      null,
-      "Repository deleted successfully"
-    )
-  );
+  
+    await PullRequest.deleteMany({ repository: repoId });
+    await File.deleteMany({ repository: repoId });
 
+    await Repository.findByIdAndDelete(repoId);
+
+    
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        null,
+        "Repository deleted successfully"
+      )
+    );
+  
 });
 
 /* ================= GET REPO RULES ================= */
