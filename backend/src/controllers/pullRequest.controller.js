@@ -144,7 +144,7 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Content and message are required");
   }
 
-  if (message.length > 30) {
+  if (message.length > 100) {
     throw new ApiError(400, "Commit message too long");
   }
 

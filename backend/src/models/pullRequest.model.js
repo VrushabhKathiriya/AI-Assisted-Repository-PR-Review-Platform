@@ -90,7 +90,7 @@ const pullRequestSchema = new Schema(
     message: {
       type: String,
       required: true,
-      maxlength: 30
+      maxlength: 100
     },
 
     ruleResult: {

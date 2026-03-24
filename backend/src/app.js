@@ -9,6 +9,7 @@ import pullRequestRoutes from "./routes/pullRequest.routes.js";
 import contributorRouter from "./routes/contributor.routes.js";
 import commentRouter from "./routes/comment.routes.js";
 import notificationRouter from "./routes/notification.routes.js";
+import statsRouter from "./routes/stats.routes.js";
 
 const app = express();
 
@@ -41,6 +42,7 @@ app.use("/api/v1/pr", pullRequestRoutes);
 app.use("/api/v1/repos", contributorRouter);
 app.use("/api/v1/pr", commentRouter);
 app.use("/api/v1/notifications", notificationRouter);
+app.use("/api/v1/stats", statsRouter);
 
 
 app.use(errorHandler);
