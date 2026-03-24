@@ -4,6 +4,7 @@ import { Repository } from "../models/repository.model.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
+import { createNotification } from "../utils/createNotification.js";
 
 /* ================= ADD COMMENT ================= */
 export const addComment = asyncHandler(async (req, res) => {
@@ -53,6 +54,16 @@ export const addComment = asyncHandler(async (req, res) => {
 
   const populatedComment = await Comment.findById(comment._id)
     .populate("author", "username email");
+
+    await createNotification({
+  recipient: pr.createdBy,
+  sender: req.user._id,
+  type: "comment_added",
+  message: `${req.user.username} commented on your PR`,
+  repository: pr.repository,
+  pullRequest: pr._id,
+  comment: comment._id
+});
 
   return res.status(201).json(
     new ApiResponse(

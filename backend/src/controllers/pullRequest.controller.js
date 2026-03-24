@@ -5,6 +5,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
+import { createNotification } from "../utils/createNotification.js";
 
 /* ---------- RULE HANDLERS ---------- */
 const ruleHandlers = {
@@ -246,6 +247,15 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     aiResult
   });
 
+  await createNotification({
+  recipient: repo.owner,
+  sender: req.user._id,
+  type: "pr_created",
+  message: `${req.user.username} created a new PR on file ${file.name}`,
+  repository: repo._id,
+  pullRequest: pr._id
+});
+
   return res
     .status(201)
     .json(new ApiResponse(201, pr, "Pull request created successfully"));
@@ -298,6 +308,15 @@ export const reviewPullRequest = asyncHandler(async (req, res) => {
   pr.reviewedBy = req.user._id;
   pr.reviewedAt = new Date();
   await pr.save();
+
+  await createNotification({
+  recipient: pr.createdBy,
+  sender: req.user._id,
+  type: action === "accept" ? "pr_accepted" : "pr_rejected",
+  message: `Your PR was ${action === "accept" ? "accepted" : "rejected"} by ${req.user.username}`,
+  repository: pr.repository,
+  pullRequest: pr._id
+});
 
   return res
     .status(200)

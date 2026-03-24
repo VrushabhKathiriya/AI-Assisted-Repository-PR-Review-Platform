@@ -8,6 +8,7 @@ import fileRoutes from "./routes/file.routes.js";
 import pullRequestRoutes from "./routes/pullRequest.routes.js";
 import contributorRouter from "./routes/contributor.routes.js";
 import commentRouter from "./routes/comment.routes.js";
+import notificationRouter from "./routes/notification.routes.js";
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use("/api/v1/files", fileRoutes);
 app.use("/api/v1/pr", pullRequestRoutes);
 app.use("/api/v1/repos", contributorRouter);
 app.use("/api/v1/pr", commentRouter);
+app.use("/api/v1/notifications", notificationRouter);
 
 
 app.use(errorHandler);
