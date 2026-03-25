@@ -40,6 +40,7 @@ export const createFile = asyncHandler(async (req, res) => {
     name,
     repository: repoId,
     createdBy: req.user._id,
+    content: content,           
     versions: [
       {
         content,
@@ -79,8 +80,11 @@ export const getFilesByRepository = asyncHandler(async (req, res) => {
     _id: file._id,
     name: file.name,
     size: file.size,
+    content: file.content,        
     versionsCount: file.versions.length,
-    createdAt: file.createdAt
+    createdBy: file.createdBy,
+    createdAt: file.createdAt,
+    updatedAt: file.updatedAt
   }));
 
   return res
@@ -102,10 +106,22 @@ export const getFileById = asyncHandler(async (req, res) => {
   const latestVersion = file.versions[file.versions.length - 1];
 
   return res.status(200).json(
-    new ApiResponse(200, {
-      ...file.toObject(),
-      latestContent: latestVersion?.content
-    }, "File fetched")
+    new ApiResponse(
+      200,
+      {
+        _id: file._id,
+        name: file.name,
+        repository: file.repository,
+        content: file.content,       
+        size: file.size,
+        versions: file.versions,
+        versionsCount: file.versions.length,
+        createdBy: file.createdBy,
+        createdAt: file.createdAt,
+        updatedAt: file.updatedAt
+      },
+      "File fetched successfully"
+    )
   );
 });
 
@@ -138,6 +154,7 @@ export const updateFile = asyncHandler(async (req, res) => {
   }
 
   /* ---------- ADD NEW VERSION ---------- */
+  file.content = content;           
   file.versions.push({
     content,
     message,

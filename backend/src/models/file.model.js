@@ -10,7 +10,7 @@ const versionSchema = new Schema(
     message: {
       type: String,
       required: true,
-      maxlength: 30
+      maxlength: 100
     },
     updatedBy: {
       type: Schema.Types.ObjectId,
@@ -40,6 +40,11 @@ const fileSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Repository",
       required: true
+    },
+
+    content: {
+      type: String,
+      default: ""
     },
 
     size: {

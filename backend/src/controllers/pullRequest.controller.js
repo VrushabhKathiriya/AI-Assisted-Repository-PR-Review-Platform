@@ -50,28 +50,40 @@ const getAIReview = async ({ content, message, ruleIssues, previousContent }) =>
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const previousContentSection = previousContent
-      ? `Previous file content:\n${previousContent}`
-      : "No previous version available.";
-
     const ruleIssuesSection =
       ruleIssues.length > 0
         ? `Rule violations found:\n${ruleIssues.join("\n")}`
         : "No rule violations found.";
 
-    const prompt = `
-You are a senior software engineer performing a code review on a pull request.
+    const previousContentSection = previousContent
+      ? `Previous Code:\n${previousContent}`
+      : "No previous version available. This is the first version of the file.";
 
-Analyze the following PR and respond ONLY in this exact JSON format with no extra text or markdown backticks:
+    const prompt = `
+You are a senior software engineer reviewing a pull request.
+
+Your job is to COMPARE the previous code and the new code and evaluate whether the changes are valid, safe, and meaningful.
+
+IMPORTANT INSTRUCTIONS:
+- Do NOT review the new code in isolation
+- Your summary MUST describe WHAT CHANGED between them.
+- You MUST compare it with the previous code
+- Do NOT describe the new code as "initial implementation" if previous code exists.
+- Identify if functionality is removed, broken, or unrelated
+- Detect regressions (loss of logic, simplification, or invalid replacement)
+- If no previous code exists, review the new code on its own merit
+- Focus on differences: additions, removals, improvements, or regressions.
+
+Respond ONLY in this exact JSON format with no extra text or markdown backticks:
 
 {
-  "summary": "One sentence describing what this PR does",
+  "summary": "What changed from previous to new code in one sentence so Describe EXACTLY what changed from previous code to new code",
   "status": "good or bad",
   "issues": [
     {
       "type": "critical or warning or suggestion",
-      "issue": "What is wrong",
-      "why": "Why it is a problem",
+      "issue": "What is wrong in terms of the change",
+      "why": "Why this change is problematic compared to previous code",
       "fix": "How to fix it"
     }
   ],
@@ -79,36 +91,56 @@ Analyze the following PR and respond ONLY in this exact JSON format with no extr
   "commitMessageFeedback": "Feedback on the commit message quality"
 }
 
-Rules:
-- status is "bad" if there are any critical or warning issues, otherwise "good"
-- issues array can be empty if code is clean
-- improvements are optional enhancements even for good code
-- Be specific, practical, and concise
-- Detect issues beyond just rule violations:
-  * Bad variable names
-  * Missing error handling
-  * Security vulnerabilities
-  * Inefficient code
-  * Poor structure
+Status Rules:
+- status is "bad" ONLY if there are critical issues
+- status is "good" if there are only warnings or suggestions
+- If new code removes important logic → critical issue → status "bad"
+- If new code is completely unrelated to previous → critical issue → status "bad"
+- If new code improves existing logic → status "good"
+- If new code is valid but has minor issues → status "good" with warnings
+
+Code Quality Rules:
+- Detect bad variable names
+- Detect missing error handling
+- Detect security vulnerabilities
+- Detect inefficient code
+- Detect poor structure
+
+STRICT INSTRUCTION:
+- Output ONLY valid JSON
+- Do NOT include any explanation or text before or after JSON
+- Do NOT use markdown
 
 PR Details:
-Commit message: "${message}"
+Commit Message: "${message}"
 ${ruleIssuesSection}
+
 ${previousContentSection}
 
-New code submitted:
+New Code:
 ${content}
     `;
 
     const result = await model.generateContent(prompt);
     const rawText = result.response.text();
 
-    // Strip markdown code fences if present
-    const clean = rawText.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+
+    if (!jsonMatch) {
+      throw new Error("No valid JSON found in AI response");
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    console.log("RAW AI RESPONSE:", rawText);
+
+    /* ---------- STATUS BASED ON CRITICAL ISSUES ONLY ---------- */
+    const hasCriticalIssues = (parsed.issues || []).some(
+      (issue) => issue.type === "critical"
+    );
 
     return {
-      status: parsed.status || "good",
+      status: hasCriticalIssues ? "bad" : "good",
       summary: parsed.summary || "",
       issues: parsed.issues || [],
       improvements: parsed.improvements || [],
@@ -118,9 +150,10 @@ ${content}
   } catch (error) {
     console.error("AI Review failed:", error.message);
 
-    // Fallback if AI fails
+    const hasCriticalRuleIssues = ruleIssues.length > 0;
+
     return {
-      status: ruleIssues.length > 0 ? "bad" : "good",
+      status: hasCriticalRuleIssues ? "bad" : "good",
       summary: "AI review unavailable",
       issues: ruleIssues.map((issue) => ({
         type: "warning",
@@ -247,14 +280,15 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     aiResult
   });
 
+  /* ---------- NOTIFY REPO OWNER ---------- */
   await createNotification({
-  recipient: repo.owner,
-  sender: req.user._id,
-  type: "pr_created",
-  message: `${req.user.username} created a new PR on file ${file.name}`,
-  repository: repo._id,
-  pullRequest: pr._id
-});
+    recipient: repo.owner,
+    sender: req.user._id,
+    type: "pr_created",
+    message: `${req.user.username} created a new PR on file ${file.name}`,
+    repository: repo._id,
+    pullRequest: pr._id
+  });
 
   return res
     .status(201)
@@ -309,14 +343,15 @@ export const reviewPullRequest = asyncHandler(async (req, res) => {
   pr.reviewedAt = new Date();
   await pr.save();
 
+  /* ---------- NOTIFY PR CREATOR ---------- */
   await createNotification({
-  recipient: pr.createdBy,
-  sender: req.user._id,
-  type: action === "accept" ? "pr_accepted" : "pr_rejected",
-  message: `Your PR was ${action === "accept" ? "accepted" : "rejected"} by ${req.user.username}`,
-  repository: pr.repository,
-  pullRequest: pr._id
-});
+    recipient: pr.createdBy,
+    sender: req.user._id,
+    type: action === "accept" ? "pr_accepted" : "pr_rejected",
+    message: `Your PR was ${action === "accept" ? "accepted" : "rejected"} by ${req.user.username}`,
+    repository: pr.repository,
+    pullRequest: pr._id
+  });
 
   return res
     .status(200)
