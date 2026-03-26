@@ -4,6 +4,7 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { createNotification } from "../utils/createNotification.js";
+import { createActivity } from "../utils/createActivity.js";
 
 /* ================= ADD CONTRIBUTOR ================= */
 export const addContributor = asyncHandler(async (req, res) => {
@@ -55,13 +56,21 @@ export const addContributor = asyncHandler(async (req, res) => {
     .populate("owner", "username email")
     .populate("contributors", "username email");
 
+    await createActivity({
+      repository: repoId,
+      performedBy: req.user._id,
+      type: "contributor_added",
+      message: `${req.user.username} added ${userToAdd.username} as contributor`,
+      targetUser: userToAdd._id
+    });
+
     await createNotification({
-  recipient: userToAdd._id,
-  sender: req.user._id,
-  type: "contributor_added",
-  message: `${req.user.username} added you as contributor to ${repository.name}`,
-  repository: repository._id
-});
+      recipient: userToAdd._id,
+      sender: req.user._id,
+      type: "contributor_added",
+      message: `${req.user.username} added you as contributor to ${repository.name}`,
+      repository: repository._id
+    });
 
   return res.status(200).json(
     new ApiResponse(
@@ -107,14 +116,22 @@ export const removeContributor = asyncHandler(async (req, res) => {
   const updatedRepo = await Repository.findById(repoId)
     .populate("owner", "username email")
     .populate("contributors", "username email");
+
+    await createActivity({
+      repository: repoId,
+      performedBy: req.user._id,
+      type: "contributor_removed",
+      message: `${req.user.username} removed a contributor from the repository`,
+      targetUser: userId
+    });
   
-  await createNotification({
-  recipient: userId,
-  sender: req.user._id,
-  type: "contributor_removed",
-  message: `You were removed from ${repository.name} by ${req.user.username}`,
-  repository: repository._id
-});
+    await createNotification({
+      recipient: userId,
+      sender: req.user._id,
+      type: "contributor_removed",
+      message: `You were removed from ${repository.name} by ${req.user.username}`,
+      repository: repository._id
+    });
 
   return res.status(200).json(
     new ApiResponse(

@@ -5,6 +5,7 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { allowedRules } from "../utils/allowedRules.js";
+import { createActivity } from "../utils/createActivity.js";
 
 
 /* ================= CREATE REPOSITORY ================= */
@@ -31,6 +32,13 @@ export const createRepository = asyncHandler(async (req, res) => {
     visibility,
     rules:{},
     owner: req.user._id
+  });
+
+    await createActivity({
+    repository: repository._id,
+    performedBy: req.user._id,
+    type: "repo_created",
+    message: `${req.user.username} created repository ${repository.name}`
   });
 
   console.log("Is Map:", repository.rules instanceof Map);
@@ -498,6 +506,19 @@ export const updateRepository = asyncHandler(async (req, res) => {
       unsetFields[`rules.${rule}`] = "";
       
     }
+  }
+
+  if (
+    (rulesToAdd && rulesToAdd.length) ||
+    (rulesToUpdate && rulesToUpdate.length) ||
+    (rulesToDelete && rulesToDelete.length)
+  ) {
+    await createActivity({
+      repository: repoId,
+      performedBy: req.user._id,
+      type: "rule_updated",
+      message: `${req.user.username} updated rules for this repository`
+    });
   }
 
   /* ---------- BUILD & EXECUTE QUERY ---------- */

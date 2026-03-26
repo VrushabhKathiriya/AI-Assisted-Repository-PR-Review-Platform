@@ -6,6 +6,7 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { createNotification } from "../utils/createNotification.js";
+import { createActivity } from "../utils/createActivity.js";
 
 /* ---------- RULE HANDLERS ---------- */
 const ruleHandlers = {
@@ -280,6 +281,17 @@ export const createPullRequest = asyncHandler(async (req, res) => {
     aiResult
   });
 
+  await createActivity({
+  repository: repo._id,
+  performedBy: req.user._id,
+  type: "pr_created",
+  message: `${req.user.username} created a PR on file ${file.name}`,
+  file: file._id,
+  pullRequest: pr._id
+});
+
+
+
   /* ---------- NOTIFY REPO OWNER ---------- */
   await createNotification({
     recipient: repo.owner,
@@ -332,11 +344,26 @@ export const reviewPullRequest = asyncHandler(async (req, res) => {
     file.content = pr.newContent;
     await file.save();
     pr.status = "accepted";
+
+    await createActivity({
+    repository: pr.repository,
+    performedBy: req.user._id,
+    type: "pr_accepted",
+    message: `${req.user.username} accepted a PR`,
+    pullRequest: pr._id
+    });
   }
 
   /* ---------- REJECT ---------- */
   if (action === "reject") {
     pr.status = "rejected";
+    await createActivity({
+    repository: pr.repository,
+    performedBy: req.user._id,
+    type: "pr_rejected",
+    message: `${req.user.username} rejected a PR`,
+    pullRequest: pr._id
+    });
   }
 
   pr.reviewedBy = req.user._id;

@@ -10,6 +10,8 @@ import contributorRouter from "./routes/contributor.routes.js";
 import commentRouter from "./routes/comment.routes.js";
 import notificationRouter from "./routes/notification.routes.js";
 import statsRouter from "./routes/stats.routes.js";
+import searchRouter from "./routes/search.routes.js";
+import activityRouter from "./routes/activity.routes.js";
 
 const app = express();
 
@@ -43,6 +45,8 @@ app.use("/api/v1/repos", contributorRouter);
 app.use("/api/v1/pr", commentRouter);
 app.use("/api/v1/notifications", notificationRouter);
 app.use("/api/v1/stats", statsRouter);
+app.use("/api/v1/search", searchRouter);
+app.use("/api/v1/activity", activityRouter);
 
 
 app.use(errorHandler);

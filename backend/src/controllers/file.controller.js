@@ -1,9 +1,11 @@
 import { File } from "../models/file.model.js";
 import { Repository } from "../models/repository.model.js";
 import { PullRequest } from "../models/pullRequest.model.js";
+import { createActivity } from "../utils/createActivity.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
+
 
 /* ================= CREATE FILE ================= */
 
@@ -49,6 +51,14 @@ export const createFile = asyncHandler(async (req, res) => {
       }
     ]
   });
+
+  await createActivity({
+  repository: repoId,
+  performedBy: req.user._id,
+  type: "file_created",
+  message: `${req.user.username} created file ${name}`,
+  file: file._id
+});
 
   return res.status(201).json(
     new ApiResponse(201, file, "File created with initial commit")
@@ -135,7 +145,7 @@ export const updateFile = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Content and message required");
   }
 
-  if (message.length > 30) {
+  if (message.length > 100) {
     throw new ApiError(400, "Message too long");
   }
 
@@ -159,6 +169,14 @@ export const updateFile = asyncHandler(async (req, res) => {
     content,
     message,
     updatedBy: req.user._id
+  });
+
+  await createActivity({
+  repository: file.repository,
+  performedBy: req.user._id,
+  type: "file_updated",
+  message: `${req.user.username} committed a new version to file ${file.name}`,
+  file: file._id
   });
 
   await file.save();
@@ -186,6 +204,13 @@ export const deleteFile = asyncHandler(async (req, res) => {
   }
   await PullRequest.deleteMany({ file: fileId });
   await File.findByIdAndDelete(fileId)
+
+  await createActivity({
+  repository: file.repository,
+  performedBy: req.user._id,
+  type: "file_deleted",
+  message: `${req.user.username} deleted file ${file.name}`
+});
 
   return res
     .status(200)
