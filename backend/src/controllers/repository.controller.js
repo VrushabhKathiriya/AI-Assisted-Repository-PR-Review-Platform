@@ -41,7 +41,7 @@ export const createRepository = asyncHandler(async (req, res) => {
     message: `${req.user.username} created repository ${repository.name}`
   });
 
-  console.log("Is Map:", repository.rules instanceof Map);
+  
 
   return res.status(201).json(
     new ApiResponse(
@@ -485,12 +485,7 @@ export const updateRepository = asyncHandler(async (req, res) => {
         throw new ApiError(400, `Rule '${rule}' does not exist and cannot be updated`);
       }
        
-      /* 🔥 CORE FIX */
-        if (value === false) {
-          unsetFields[`rules.${rule}`] = "";
-         } else {
-          setFields[`rules.${rule}`] = value;
-        }
+      setFields[`rules.${rule}`] = value;
 
       
       

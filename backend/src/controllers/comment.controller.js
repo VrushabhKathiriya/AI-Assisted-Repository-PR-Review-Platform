@@ -39,10 +39,12 @@ export const addComment = asyncHandler(async (req, res) => {
   const isContributor = repository.contributors.some(
     (c) => c.toString() === req.user._id.toString()
   );
-  const isPublic = repository.visibility === "public";
 
-  if (!isOwner && !isContributor && !isPublic) {
-    throw new ApiError(403, "You do not have access to comment on this PR");
+  if (!isOwner && !isContributor) {
+    throw new ApiError(
+      403,
+      "Only repository owner and contributors can comment on PRs"
+    );
   }
 
   /* ---------- CREATE COMMENT ---------- */
@@ -56,6 +58,7 @@ export const addComment = asyncHandler(async (req, res) => {
   const populatedComment = await Comment.findById(comment._id)
     .populate("author", "username email");
 
+  /* ---------- ACTIVITY ---------- */
   await createActivity({
     repository: pr.repository,
     performedBy: req.user._id,
@@ -65,6 +68,7 @@ export const addComment = asyncHandler(async (req, res) => {
     comment: comment._id
   });
 
+  /* ---------- NOTIFICATION ---------- */
   await createNotification({
     recipient: pr.createdBy,
     sender: req.user._id,
@@ -102,6 +106,7 @@ export const getComments = asyncHandler(async (req, res) => {
   }
 
   /* ---------- ACCESS CHECK ---------- */
+  
   const isOwner = repository.owner.toString() === req.user._id.toString();
   const isContributor = repository.contributors.some(
     (c) => c.toString() === req.user._id.toString()
@@ -183,29 +188,25 @@ export const deleteComment = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Comment not found");
   }
 
-  /* ---------- FETCH REPO FOR OWNER CHECK ---------- */
-  const pr = await PullRequest.findById(comment.pullRequest);
+  /* ---------- FETCH REPO ---------- */
   const repository = await Repository.findById(comment.repository);
-
-  const isCommentAuthor = comment.author.toString() === req.user._id.toString();
-  const isRepoOwner = repository.owner.toString() === req.user._id.toString();
+  if (!repository) {
+    throw new ApiError(404, "Repository not found");
+  }
 
   /* ---------- PERMISSION CHECK ---------- */
-  /* Author can delete own comment, repo owner can delete any comment */
+  const isCommentAuthor =
+    comment.author.toString() === req.user._id.toString();
+  const isRepoOwner =
+    repository.owner.toString() === req.user._id.toString();
+
   if (!isCommentAuthor && !isRepoOwner) {
-    throw new ApiError(
-      403,
-      "You can only delete your own comments"
-    );
+    throw new ApiError(403, "You can only delete your own comments");
   }
 
   await comment.deleteOne();
 
   return res.status(200).json(
-    new ApiResponse(
-      200,
-      null,
-      "Comment deleted successfully"
-    )
+    new ApiResponse(200, null, "Comment deleted successfully")
   );
 });

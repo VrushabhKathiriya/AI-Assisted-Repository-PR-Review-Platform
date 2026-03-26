@@ -27,6 +27,11 @@ const generateAccessAndRefreshTokens = async (userId) => {
   }
 };
 
+
+const isUserVerified = (user) => {
+  return user.isVerified === true || user.isPhoneVerified === true;
+};
+
 /* ================= REGISTER ================= */
 export const registerUser = asyncHandler(async (req, res) => {
   let { fullName, username, email, phone, password } = req.body;
@@ -46,7 +51,7 @@ export const registerUser = asyncHandler(async (req, res) => {
   /* ---------- CHECK VERIFIED USERS ---------- */
   const verifiedUsernameExists = await User.findOne({
     username,
-    isVerified: true
+    $or: [{ isVerified: true }, { isPhoneVerified: true }]
   });
   if (verifiedUsernameExists) {
     throw new ApiError(409, "Username already taken");
@@ -72,10 +77,9 @@ export const registerUser = asyncHandler(async (req, res) => {
     }
   }
 
-  /* ---------- DELETE OLD UNVERIFIED ACCOUNTS ---------- */
-  /* Handles case where user registered before with wrong email/phone */
   await User.deleteMany({
     isVerified: false,
+    isPhoneVerified: false,
     $or: [
       { username },
       ...(email ? [{ email }] : []),
@@ -95,6 +99,8 @@ export const registerUser = asyncHandler(async (req, res) => {
     phone: phone || undefined,
     password,
     authProvider: email ? "email" : "phone",
+    isVerified: false,
+    isPhoneVerified: false,
     emailOtp: email ? otp : undefined,
     emailOtpExpiry: email ? otpExpiry : undefined,
     phoneOtp: phone ? otp : undefined,
@@ -106,10 +112,10 @@ export const registerUser = asyncHandler(async (req, res) => {
     if (email) await sendOtpEmail(email, otp);
     if (phone) await sendPhoneOtp(phone, otp);
   } catch (error) {
-    // Clean up if OTP sending fails
     await User.deleteOne({
       username,
-      isVerified: false
+      isVerified: false,
+      isPhoneVerified: false
     });
     throw new ApiError(500, "Failed to send OTP. Please try again.");
   }
@@ -129,7 +135,7 @@ export const verifyOtp = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Email or phone is required");
   }
 
-  /* ---------- FIND UNVERIFIED USER ---------- */
+  /* ---------- FIND USER ---------- */
   const user = await User.findOne({
     $or: [
       ...(email ? [{ email }] : []),
@@ -144,7 +150,8 @@ export const verifyOtp = asyncHandler(async (req, res) => {
     );
   }
 
-  if (user.isVerified) {
+  
+  if (isUserVerified(user)) {
     throw new ApiError(400, "Account already verified. Please login.");
   }
 
@@ -155,15 +162,13 @@ export const verifyOtp = asyncHandler(async (req, res) => {
     if (user.emailOtp !== otp) {
       throw new ApiError(400, "Invalid OTP");
     }
+
     if (user.emailOtpExpiry < new Date()) {
       await user.deleteOne();
-      throw new ApiError(
-        400,
-        "OTP expired. Please register again."
-      );
+      throw new ApiError(400, "OTP expired. Please register again.");
     }
 
-    /* ---------- VERIFY EMAIL ---------- */
+    
     user.isVerified = true;
     user.emailOtp = undefined;
     user.emailOtpExpiry = undefined;
@@ -172,15 +177,13 @@ export const verifyOtp = asyncHandler(async (req, res) => {
     if (user.phoneOtp !== otp) {
       throw new ApiError(400, "Invalid OTP");
     }
+
     if (user.phoneOtpExpiry < new Date()) {
       await user.deleteOne();
-      throw new ApiError(
-        400,
-        "OTP expired. Please register again."
-      );
+      throw new ApiError(400, "OTP expired. Please register again.");
     }
 
-    /* ---------- VERIFY PHONE ---------- */
+    
     user.isPhoneVerified = true;
     user.phoneOtp = undefined;
     user.phoneOtpExpiry = undefined;
@@ -212,7 +215,8 @@ export const loginUser = asyncHandler(async (req, res) => {
     throw new ApiError(404, "User not found");
   }
 
-  if (!user.isVerified && !user.isPhoneVerified) {
+  
+  if (!isUserVerified(user)) {
     throw new ApiError(401, "Please verify your account first");
   }
 
@@ -359,7 +363,10 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
   const updateData = { fullName };
 
   if (email) {
-    const existingEmail = await User.findOne({ email, isVerified: true });
+    const existingEmail = await User.findOne({
+      email,
+      isVerified: true
+    });
     if (
       existingEmail &&
       existingEmail._id.toString() !== req.user._id.toString()
@@ -370,7 +377,10 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
   }
 
   if (phone) {
-    const existingPhone = await User.findOne({ phone, isPhoneVerified: true });
+    const existingPhone = await User.findOne({
+      phone,
+      isPhoneVerified: true
+    });
     if (
       existingPhone &&
       existingPhone._id.toString() !== req.user._id.toString()
@@ -408,6 +418,14 @@ export const forgotPassword = asyncHandler(async (req, res) => {
 
   if (!user) throw new ApiError(404, "User not found");
 
+  
+  if (!isUserVerified(user)) {
+    throw new ApiError(
+      401,
+      "Please verify your account before resetting password"
+    );
+  }
+
   if (email) {
     const resetToken = user.generateResetPasswordToken();
     await user.save({ validateBeforeSave: false });
@@ -418,6 +436,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
       await sendResetPasswordEmail(user.email, resetLink);
     } catch (error) {
       console.error("Reset email failed:", error.message);
+      throw new ApiError(500, "Failed to send reset email");
     }
   }
 
@@ -431,6 +450,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
       await sendPhoneOtp(phone, otp);
     } catch (error) {
       console.error("Reset OTP SMS failed:", error.message);
+      throw new ApiError(500, "Failed to send reset OTP");
     }
   }
 

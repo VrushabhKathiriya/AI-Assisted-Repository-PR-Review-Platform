@@ -18,5 +18,13 @@ export const allowedRules = {
   disallowDebugger: {
     type: "boolean",
     default: false
+  },
+  requireIssueLink: {
+    type: "boolean",
+    default: false
+  },
+  maxFileLines: {
+    type: "number",
+    default: 300
   }
 };

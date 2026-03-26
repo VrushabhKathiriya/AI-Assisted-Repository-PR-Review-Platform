@@ -17,8 +17,8 @@ export const createFile = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Name, content and message are required");
   }
 
-  if (message.length > 30) {
-    throw new ApiError(400, "Commit message cannot exceed 30 characters");
+  if (message.length > 100) {
+    throw new ApiError(400, "Commit message cannot exceed 100 characters");
   }
 
   const repository = await Repository.findById(repoId);
@@ -154,6 +154,8 @@ export const updateFile = asyncHandler(async (req, res) => {
 
   const repository = await Repository.findById(file.repository);
 
+  if (!repository) throw new ApiError(404, "Repository not found");
+
   const isOwner = repository.owner.toString() === req.user._id.toString();
   const isContributor = repository.contributors.some(
     (c) => c.toString() === req.user._id.toString()
@@ -197,20 +199,24 @@ export const deleteFile = asyncHandler(async (req, res) => {
 
   const repository = await Repository.findById(file.repository);
 
+  if (!repository) throw new ApiError(404, "Repository not found");
+
   const isOwner = repository.owner.toString() === req.user._id.toString();
 
   if (!isOwner) {
     throw new ApiError(403, "Only owner can delete file");
   }
-  await PullRequest.deleteMany({ file: fileId });
-  await File.findByIdAndDelete(fileId)
-
   await createActivity({
   repository: file.repository,
   performedBy: req.user._id,
   type: "file_deleted",
   message: `${req.user.username} deleted file ${file.name}`
-});
+  });
+
+  await PullRequest.deleteMany({ file: fileId });
+  await File.findByIdAndDelete(fileId)
+
+  
 
   return res
     .status(200)
