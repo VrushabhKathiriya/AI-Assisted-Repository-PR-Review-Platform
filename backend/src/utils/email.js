@@ -81,3 +81,44 @@ export const sendResetPasswordEmail = async (to, resetLink) => {
   });
 };
 
+/* ================= SEND INVITATION EMAIL ================= */
+export const sendInvitationEmail = async (
+  to,
+  inviterName,
+  repoName,
+  acceptLink,
+  declineLink
+) => {
+  await sendMail({
+    to,
+    subject: `${inviterName} invited you to collaborate on ${repoName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>🎉 You have been invited!</h2>
+        <p>
+          <strong>${inviterName}</strong> has invited you to collaborate 
+          on the repository <strong>${repoName}</strong>.
+        </p>
+        <p>Click below to respond to this invitation:</p>
+        <div style="margin: 20px 0;">
+          <a href="${acceptLink}"
+             style="padding:12px 24px; background:#16a34a; color:white; 
+                    text-decoration:none; border-radius:6px; margin-right:10px;">
+            ✅ Accept Invitation
+          </a>
+          <a href="${declineLink}"
+             style="padding:12px 24px; background:#dc2626; color:white; 
+                    text-decoration:none; border-radius:6px;">
+            ❌ Decline Invitation
+          </a>
+        </div>
+        <p style="color:#6b7280; font-size:14px;">
+          This invitation expires in 7 days.
+        </p>
+        <p style="color:#6b7280; font-size:14px;">
+          If you did not expect this invitation, you can safely ignore this email.
+        </p>
+      </div>
+    `
+  });
+};

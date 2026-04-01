@@ -10,6 +10,8 @@ import {
   getCurrentUser,
   changeCurrentPassword,
   updateAccountDetails,
+  addEmailToProfile,
+  verifyEmailForProfile,
   forgotPassword,
   resetPassword
 } from "../controllers/user.controller.js";
@@ -37,6 +39,10 @@ router.get("/current-user", verifyJWT, getCurrentUser);
 router.post("/change-password", verifyJWT, changeCurrentPassword);
 
 router.patch("/update-profile", verifyJWT, updateAccountDetails);
+
+/*Email management for phone-only users */
+router.post("/add-email", verifyJWT, addEmailToProfile);
+router.post("/verify-profile-email", verifyJWT, verifyEmailForProfile);
 
 
 export default router;

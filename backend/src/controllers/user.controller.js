@@ -351,30 +351,15 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
     new ApiResponse(200, {}, "Password changed successfully")
   );
 });
-
 /* ================= UPDATE PROFILE ================= */
 export const updateAccountDetails = asyncHandler(async (req, res) => {
-  const { fullName, email, phone } = req.body || {};
+  const { fullName, phone } = req.body || {};
 
   if (!fullName) {
     throw new ApiError(400, "Full name is required");
   }
 
   const updateData = { fullName };
-
-  if (email) {
-    const existingEmail = await User.findOne({
-      email,
-      isVerified: true
-    });
-    if (
-      existingEmail &&
-      existingEmail._id.toString() !== req.user._id.toString()
-    ) {
-      throw new ApiError(409, "Email already in use");
-    }
-    updateData.email = email.toLowerCase().trim();
-  }
 
   if (phone) {
     const existingPhone = await User.findOne({
@@ -398,6 +383,119 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
 
   return res.status(200).json(
     new ApiResponse(200, user, "Account updated successfully")
+  );
+});
+
+/* ================= ADD EMAIL TO PROFILE (with verification) ================= */
+/* Used by phone-only users who want to add email */
+/* Used by email users who want to UPDATE their existing email */
+export const addEmailToProfile = asyncHandler(async (req, res) => {
+
+  const { email } = req.body;
+
+  if (!email || !email.trim()) {
+    throw new ApiError(400, "Email is required");
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+
+  /* ---------- CHECK IF SAME AS CURRENT EMAIL ---------- */
+  if (req.user.email === normalizedEmail) {
+    throw new ApiError(400, "This is already your current email");
+  }
+
+  /* ---------- CHECK EMAIL NOT TAKEN BY ANOTHER USER ---------- */
+  const existingEmail = await User.findOne({
+    email: normalizedEmail,
+    isVerified: true
+  });
+
+  if (
+    existingEmail &&
+    existingEmail._id.toString() !== req.user._id.toString()
+  ) {
+    throw new ApiError(409, "Email already in use by another account");
+  }
+
+  /* ---------- GENERATE OTP ---------- */
+  const otp = generateOtp();
+  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+  /* ---------- SAVE OTP + PENDING EMAIL ---------- */
+  await User.findByIdAndUpdate(req.user._id, {
+    emailOtp: otp,
+    emailOtpExpiry: otpExpiry,
+    pendingEmail: normalizedEmail
+  });
+
+  /* ---------- SEND OTP ---------- */
+  try {
+    await sendOtpEmail(normalizedEmail, otp);
+  } catch (error) {
+    await User.findByIdAndUpdate(req.user._id, {
+      $unset: { emailOtp: 1, emailOtpExpiry: 1, pendingEmail: 1 }
+    });
+    throw new ApiError(500, "Failed to send OTP. Please try again.");
+  }
+
+  /* ---------- RESPONSE ---------- */
+  const isUpdating = !!req.user.email;
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      null,
+      isUpdating
+        ? `OTP sent to ${normalizedEmail}. Verify to update your email.`
+        : `OTP sent to ${normalizedEmail}. Verify to add email to your profile.`
+    )
+  );
+});
+
+/* ================= VERIFY EMAIL OTP FOR PROFILE ================= */
+export const verifyEmailForProfile = asyncHandler(async (req, res) => {
+
+  const { otp } = req.body;
+
+  if (!otp) throw new ApiError(400, "OTP is required");
+
+  /* ---------- FETCH USER WITH OTP FIELDS ---------- */
+  const user = await User.findById(req.user._id).select(
+    "+emailOtp +emailOtpExpiry +pendingEmail"
+  );
+
+  if (!user.emailOtp || !user.pendingEmail) {
+    throw new ApiError(400, "No pending email verification found");
+  }
+
+  /* ---------- VALIDATE OTP ---------- */
+  if (user.emailOtp !== otp) {
+    throw new ApiError(400, "Invalid OTP");
+  }
+
+  if (user.emailOtpExpiry < new Date()) {
+    await User.findByIdAndUpdate(req.user._id, {
+      $unset: { emailOtp: 1, emailOtpExpiry: 1, pendingEmail: 1 }
+    });
+    throw new ApiError(400, "OTP expired. Please try again.");
+  }
+
+  /* ---------- ADD EMAIL TO PROFILE ---------- */
+  await User.findByIdAndUpdate(req.user._id, {
+    email: user.pendingEmail,
+    isVerified: true,
+    $unset: { emailOtp: 1, emailOtpExpiry: 1, pendingEmail: 1 }
+  });
+
+  const updatedUser = await User.findById(req.user._id)
+    .select("-password -refreshToken");
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      updatedUser,
+      "Email added and verified successfully"
+    )
   );
 });
 

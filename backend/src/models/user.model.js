@@ -27,6 +27,13 @@ const userSchema = new Schema(
       unique: true
     },
 
+    pendingEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: null
+    },
+
     phone: {
       type: String,
       trim: true,
