@@ -52,6 +52,12 @@ const notificationSchema = new Schema(
       ref: "Comment"
     },
 
+    /* ---------- INVITATION TOKEN (for in-app contributor invites) ---------- */
+    invitationToken: {
+      type: String,
+      default: null
+    },
+
     /* ---------- READ STATUS ---------- */
     isRead: {
       type: Boolean,

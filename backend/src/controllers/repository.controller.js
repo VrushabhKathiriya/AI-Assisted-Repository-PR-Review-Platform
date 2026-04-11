@@ -56,15 +56,18 @@ export const createRepository = asyncHandler(async (req, res) => {
 
 export const getRepositories = asyncHandler(async (req, res) => {
 
+  // Only return repos the user owns OR is an explicit contributor of.
+  // Public visibility is for *access control* on detail pages, not for
+  // exposing every public repo in someone else's repository list.
   const repositories = await Repository.find({
     $or: [
       { owner: req.user._id },
-      { contributors: req.user._id },
-      { visibility: "public" }
+      { contributors: req.user._id }
     ]
   })
   .populate("owner", "username email")
-  .populate("contributors", "username email");
+  .populate("contributors", "username email")
+  .sort({ updatedAt: -1 });
 
   return res.status(200).json(
     new ApiResponse(

@@ -7,7 +7,8 @@ export const createNotification = async ({
   message,
   repository = null,
   pullRequest = null,
-  comment = null
+  comment = null,
+  invitationToken = null
 }) => {
   try {
     /* Don't notify yourself */
@@ -20,7 +21,8 @@ export const createNotification = async ({
       message,
       repository,
       pullRequest,
-      comment
+      comment,
+      invitationToken
     });
   } catch (error) {
     /* Notification failure should never break main flow */

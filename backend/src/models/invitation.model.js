@@ -22,9 +22,16 @@ const invitationSchema = new Schema(
 
     email: {
       type: String,
-      required: true,
       lowercase: true,
       trim: true
+      // optional — not present for in-app invitations
+    },
+
+    /* ---------- HOW THE INVITATION WAS SENT ---------- */
+    source: {
+      type: String,
+      enum: ["email", "in_app"],
+      default: "email"
     },
 
     token: {

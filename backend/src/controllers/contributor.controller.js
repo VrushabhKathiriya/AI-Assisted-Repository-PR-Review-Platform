@@ -8,7 +8,6 @@ import { createActivity } from "../utils/createActivity.js";
 import { sendInvitationEmail } from "../utils/email.js";
 import { Invitation } from "../models/invitation.model.js";
 import crypto from "crypto";
-import { model } from "mongoose";
 
 /* ================= INVITE CONTRIBUTOR BY USERNAME ================= */
 export const inviteContributor = asyncHandler(async (req, res) => {
@@ -141,14 +140,26 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
     .update(token)
     .digest("hex");
 
-  /* ---------- FIND INVITATION ---------- */
-  const invitation = await Invitation.findOne({
-    token: hashedToken,
-    status: "pending"
-  });
+  /* ---------- FIND INVITATION (pending OR already accepted) ---------- */
+  const invitation = await Invitation.findOne({ token: hashedToken });
 
   if (!invitation) {
     throw new ApiError(404, "Invitation not found or already used");
+  }
+
+  /* ---------- IDEMPOTENCY: already accepted ---------- */
+  if (invitation.status === "accepted") {
+    const repo = await Repository.findById(invitation.repository)
+      .populate("owner", "username email")
+      .populate("contributors", "username email");
+    return res.status(200).json(
+      new ApiResponse(200, repo, "You have already joined this repository")
+    );
+  }
+
+  /* ---------- CHECK STATUS ---------- */
+  if (invitation.status !== "pending") {
+    throw new ApiError(400, `This invitation has been ${invitation.status}`);
   }
 
   /* ---------- CHECK EXPIRY ---------- */
@@ -181,7 +192,12 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
   if (alreadyContributor) {
     invitation.status = "accepted";
     await invitation.save();
-    throw new ApiError(409, "You are already a contributor of this repository");
+    const updatedRepo = await Repository.findById(repository._id)
+      .populate("owner", "username email")
+      .populate("contributors", "username email");
+    return res.status(200).json(
+      new ApiResponse(200, updatedRepo, "You are already a contributor of this repository")
+    );
   }
 
   /* ---------- ADD AS CONTRIBUTOR ---------- */
@@ -192,14 +208,32 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
   invitation.status = "accepted";
   await invitation.save();
 
-  /* ---------- ACTIVITY ---------- */
-  await createActivity({
+  /* ---------- CLEAR INVITATION TOKEN FROM NOTIFICATION (hides Accept/Decline buttons) ---------- */
+  const { Notification } = await import("../models/notification.model.js");
+  await Notification.updateMany(
+    { recipient: req.user._id, invitationToken: token },
+    { $set: { invitationToken: null, isRead: true } }
+  );
+
+  /* ---------- ACTIVITY (deduplicated) ---------- */
+  const { Activity } = await import("../models/activity.model.js");
+  const existingActivity = await Activity.findOne({
     repository: repository._id,
     performedBy: req.user._id,
     type: "contributor_added",
-    message: `${req.user.username} accepted invitation and joined ${repository.name}`,
-    targetUser: req.user._id
+    targetUser: req.user._id,
+    createdAt: { $gte: new Date(Date.now() - 60 * 1000) } // within last 60s
   });
+
+  if (!existingActivity) {
+    await createActivity({
+      repository: repository._id,
+      performedBy: req.user._id,
+      type: "contributor_added",
+      message: `${req.user.username} accepted invitation and joined ${repository.name}`,
+      targetUser: req.user._id
+    });
+  }
 
   /* ---------- NOTIFY OWNER ---------- */
   await createNotification({
@@ -256,6 +290,13 @@ export const declineInvitation = asyncHandler(async (req, res) => {
 
   invitation.status = "declined";
   await invitation.save();
+
+  /* ---------- CLEAR INVITATION TOKEN FROM NOTIFICATION (hides Accept/Decline buttons) ---------- */
+  const { Notification } = await import("../models/notification.model.js");
+  await Notification.updateMany(
+    { recipient: req.user._id, invitationToken: token },
+    { $set: { invitationToken: null, isRead: true } }
+  );
 
   /* ---------- NOTIFY OWNER ---------- */
   const repository = await Repository.findById(invitation.repository);
@@ -366,7 +407,7 @@ export const addContributor = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Owner cannot be added as contributor");
   }
 
-  /* ---------- PREVENT DUPLICATE ---------- */
+  /* ---------- PREVENT DUPLICATE CONTRIBUTOR ---------- */
   const alreadyContributor = repository.contributors.some(
     (c) => c.toString() === userToAdd._id.toString()
   );
@@ -375,38 +416,50 @@ export const addContributor = asyncHandler(async (req, res) => {
     throw new ApiError(409, `User '${username}' is already a contributor`);
   }
 
-  /* ---------- ADD CONTRIBUTOR ---------- */
-  repository.contributors.push(userToAdd._id);
-  await repository.save();
+  /* ---------- PREVENT DUPLICATE PENDING INVITATION ---------- */
+  const existingInvitation = await Invitation.findOne({
+    repository: repoId,
+    invitedUser: userToAdd._id,
+    status: "pending"
+  });
 
-  const updatedRepo = await Repository.findById(repoId)
-    .populate("owner", "username email")
-    .populate("contributors", "username email");
+  if (existingInvitation) {
+    throw new ApiError(409, `An invitation is already pending for '${username}'`);
+  }
 
-    await createActivity({
-      repository: repoId,
-      performedBy: req.user._id,
-      type: "contributor_added",
-      message: `${req.user.username} added ${userToAdd.username} as contributor`,
-      targetUser: userToAdd._id
-    });
+  /* ---------- CREATE IN-APP INVITATION (no email required) ---------- */
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const hashedToken = crypto.createHash("sha256").update(rawToken).digest("hex");
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-    await createNotification({
-      recipient: userToAdd._id,
-      sender: req.user._id,
-      type: "contributor_added",
-      message: `${req.user.username} added you as contributor to ${repository.name}`,
-      repository: repository._id
-    });
+  await Invitation.create({
+    repository: repoId,
+    invitedBy: req.user._id,
+    invitedUser: userToAdd._id,
+    token: hashedToken,
+    source: "in_app",
+    expiresAt
+  });
+
+  /* ---------- IN-APP NOTIFICATION (stores token for Accept/Decline) ---------- */
+  await createNotification({
+    recipient: userToAdd._id,
+    sender: req.user._id,
+    type: "contributor_added",
+    message: `${req.user.username} invited you to join "${repository.name}" as a contributor`,
+    repository: repository._id,
+    invitationToken: rawToken
+  });
 
   return res.status(200).json(
     new ApiResponse(
       200,
-      updatedRepo,
-      `'${username}' added as contributor successfully`
+      null,
+      `Invitation sent to '${username}' — they will join once they accept in their notifications`
     )
   );
 });
+
 
 /* ================= REMOVE CONTRIBUTOR ================= */
 export const removeContributor = asyncHandler(async (req, res) => {

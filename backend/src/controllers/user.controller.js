@@ -198,11 +198,14 @@ export const verifyOtp = asyncHandler(async (req, res) => {
 
 /* ================= LOGIN ================= */
 export const loginUser = asyncHandler(async (req, res) => {
-  const { email, phone, password } = req.body || {};
+  let { email, phone, password } = req.body || {};
 
   if (!(email || phone) || !password) {
     throw new ApiError(400, "Credentials required");
   }
+
+  // Normalize email to match how it's stored
+  if (email) email = email.toLowerCase().trim();
 
   const user = await User.findOne({
     $or: [
