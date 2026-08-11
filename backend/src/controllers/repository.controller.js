@@ -6,7 +6,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { allowedRules } from "../utils/allowedRules.js";
 import { createActivity } from "../utils/createActivity.js";
-
+import redisClient from "../config/redis.js";
 
 /* ================= CREATE REPOSITORY ================= */
 
@@ -84,13 +84,51 @@ export const getRepositories = asyncHandler(async (req, res) => {
 export const getRepositoryById = asyncHandler(async (req, res) => {
 
   const { repoId } = req.params;
+  
+  // Older version
+  // const repository = await Repository.findById(repoId)
+  //   .populate("owner", "username email")
+  //   .populate("contributors", "username email");
 
-  const repository = await Repository.findById(repoId)
-    .populate("owner", "username email")
-    .populate("contributors", "username email");
+  // if (!repository) {
+  //   throw new ApiError(404, "Repository not found");
+  // }
 
-  if (!repository) {
-    throw new ApiError(404, "Repository not found");
+  const cacheKey = `repo:${repoId}`;
+
+  // 1. Check Redis
+  const cachedRepository = await redisClient.get(cacheKey);
+
+  let repository;
+
+  if (cachedRepository) {
+
+    // Cache HIT
+    repository = JSON.parse(cachedRepository);
+
+    console.log("Repository fetched from Redis");
+
+  } else {
+
+    // Cache MISS → Fetch from MongoDB
+    repository = await Repository.findById(repoId)
+      .populate("owner", "username email")
+      .populate("contributors", "username email");
+
+    if (!repository) {
+      throw new ApiError(404, "Repository not found");
+    }
+
+    // Store repository in Redis for 5 minutes
+    await redisClient.set(
+      cacheKey,
+      JSON.stringify(repository),
+      {
+        EX: 600
+      }
+    );
+
+    console.log("Repository fetched from MongoDB and cached");
   }
 
   const isOwner = repository.owner._id.toString() === req.user._id.toString();
@@ -527,7 +565,12 @@ export const updateRepository = asyncHandler(async (req, res) => {
   if (Object.keys(updateQuery).length > 0) {
     // await Repository.findByIdAndUpdate(repoId, updateQuery, { new: true });
     await Repository.findByIdAndUpdate(repoId, updateQuery, { returnDocument: 'after' });
+
+    // Invalidate cached repository
+    await redisClient.del(`repo:${repoId}`);
   }
+
+  
 
   const updatedRepository = await Repository.findById(repoId)
     .populate("owner", "username email")
@@ -566,6 +609,8 @@ export const deleteRepository = asyncHandler(async (req, res) => {
 
     await Repository.findByIdAndDelete(repoId);
 
+    // Invalidate cached repository
+    await redisClient.del(`repo:${repoId}`);
     
 
     return res.status(200).json(
