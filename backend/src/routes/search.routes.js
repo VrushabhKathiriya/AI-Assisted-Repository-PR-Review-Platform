@@ -5,10 +5,14 @@ import {
   searchUsers,
   searchFiles,
   searchPullRequests,
-  globalSearch
+  globalSearch,
+  searchSuggestions
 } from "../controllers/search.controller.js";
 
 const router = express.Router();
+
+/* ---------- AUTOCOMPLETE SUGGESTIONS ---------- */
+router.get("/suggestions", verifyJWT, searchSuggestions);
 
 /* ---------- GLOBAL SEARCH ---------- */
 router.get("/", verifyJWT, globalSearch);

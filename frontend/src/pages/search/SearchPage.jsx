@@ -1,17 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { globalSearch } from "../../api/search.api.js";
+import { globalSearch, fetchSuggestions } from "../../api/search.api.js";
 import Layout from "../../components/common/Layout.jsx";
 import Loader from "../../components/common/Loader.jsx";
-import { Search, GitBranch, Users, FileCode, GitPullRequest, Globe, Lock } from "lucide-react";
+import {
+  Search,
+  GitBranch,
+  Users,
+  FileCode,
+  GitPullRequest,
+  Globe,
+  Lock,
+  Loader2,
+  AlertCircle
+} from "lucide-react";
 import { getPRStatusColor } from "../../utils/getStatusColor.js";
+
+/* ─── Helpers ────────────────────────────────────────────────── */
 
 const prBadge = (status) => {
   const map = {
-    pending: { bg: "rgba(245,158,11,0.12)", color: "#fbbf24", border: "rgba(245,158,11,0.25)" },
-    accepted: { bg: "rgba(5,150,105,0.12)", color: "#34d399", border: "rgba(5,150,105,0.25)" },
-    rejected: { bg: "rgba(239,68,68,0.12)", color: "#f87171", border: "rgba(239,68,68,0.25)" },
+    pending:  { bg: "rgba(245,158,11,0.12)",  color: "#fbbf24", border: "rgba(245,158,11,0.25)" },
+    accepted: { bg: "rgba(5,150,105,0.12)",   color: "#34d399", border: "rgba(5,150,105,0.25)" },
+    rejected: { bg: "rgba(239,68,68,0.12)",   color: "#f87171", border: "rgba(239,68,68,0.25)" },
   };
   return map[status] || map.pending;
 };
@@ -29,10 +41,267 @@ const SectionHeader = ({ icon: Icon, title, count }) => (
   </div>
 );
 
+/* Icon + colour per suggestion type */
+const SUGGESTION_META = {
+  repository:  { icon: GitBranch,     color: "#34d399",  label: "Repo" },
+  user:        { icon: Users,         color: "#60a5fa",  label: "User" },
+  file:        { icon: FileCode,      color: "#a78bfa",  label: "File" },
+  pullRequest: { icon: GitPullRequest, color: "#fbbf24", label: "PR"   },
+};
+
+/* ─── Single Suggestion Row ──────────────────────────────────── */
+
+const SuggestionItem = ({ item, meta, onSelect }) => {
+  const Icon = meta.icon;
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => {
+        /* mousedown fires before input blur — keep dropdown alive */
+        e.preventDefault();
+        onSelect(item.label);
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex", alignItems: "center", gap: 12,
+        width: "100%", padding: "9px 14px",
+        background: hovered ? "rgba(37,99,235,0.08)" : "transparent",
+        border: "none", cursor: "pointer",
+        textAlign: "left", transition: "background 0.1s",
+        outline: "none",
+      }}
+    >
+      <div style={{
+        width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+        background: `${meta.color}18`,
+        border: `1px solid ${meta.color}30`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <Icon size={12} color={meta.color} />
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{
+          fontSize: 13, fontWeight: 600, color: "var(--text-primary)",
+          marginBottom: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+        }}>
+          {item.label}
+        </p>
+        {item.sublabel && (
+          <p style={{
+            fontSize: 11, color: "var(--text-muted)",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+          }}>
+            {item.sublabel}
+          </p>
+        )}
+      </div>
+    </button>
+  );
+};
+
+/* ─── Suggestion Dropdown ────────────────────────────────────── */
+
+const SuggestionDropdown = ({ suggestions, isLoading, error, query, onSelect }) => {
+  if (!query || query.trim().length < 2) return null;
+
+  const containerStyle = {
+    position: "absolute",
+    top: "calc(100% + 6px)",
+    left: 0,
+    right: 0,
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--border-default)",
+    borderRadius: 12,
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03)",
+    zIndex: 100,
+    overflow: "hidden",
+    maxHeight: 340,
+    overflowY: "auto",
+  };
+
+  if (isLoading) {
+    return (
+      <div className="suggestions-dropdown" style={containerStyle}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "14px 16px", color: "var(--text-muted)", fontSize: 13
+        }}>
+          <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />
+          Searching…
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="suggestions-dropdown" style={containerStyle}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "14px 16px", color: "#f87171", fontSize: 13
+        }}>
+          <AlertCircle size={14} />
+          Could not load suggestions
+        </div>
+      </div>
+    );
+  }
+
+  if (suggestions.length === 0) {
+    return (
+      <div className="suggestions-dropdown" style={containerStyle}>
+        <div style={{
+          padding: "14px 16px", color: "var(--text-muted)", fontSize: 13, textAlign: "center"
+        }}>
+          No suggestions for "{query}"
+        </div>
+      </div>
+    );
+  }
+
+  const grouped = suggestions.reduce((acc, s) => {
+    if (!acc[s.type]) acc[s.type] = [];
+    acc[s.type].push(s);
+    return acc;
+  }, {});
+
+  const typeOrder = ["repository", "user", "file", "pullRequest"];
+
+  return (
+    <div className="suggestions-dropdown" style={containerStyle}>
+      {typeOrder
+        .filter((t) => grouped[t]?.length > 0)
+        .map((type, groupIdx) => {
+          const meta = SUGGESTION_META[type];
+          const Icon = meta.icon;
+          const items = grouped[type];
+          return (
+            <div key={type}>
+              <div style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "8px 14px 4px",
+                borderTop: groupIdx > 0 ? "1px solid var(--border-subtle)" : "none",
+                marginTop: groupIdx > 0 ? 2 : 0,
+              }}>
+                <Icon size={11} color={meta.color} />
+                <span style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+                  color: "var(--text-muted)", textTransform: "uppercase"
+                }}>
+                  {meta.label}s
+                </span>
+              </div>
+              {items.map((item) => (
+                <SuggestionItem key={item._id} item={item} meta={meta} onSelect={onSelect} />
+              ))}
+            </div>
+          );
+        })}
+
+      <div style={{
+        padding: "8px 14px",
+        borderTop: "1px solid var(--border-subtle)",
+        fontSize: 11, color: "var(--text-muted)",
+        display: "flex", alignItems: "center", justifyContent: "space-between"
+      }}>
+        <span>↵ to search all results</span>
+        <span style={{ color: "#484f58" }}>esc to close</span>
+      </div>
+    </div>
+  );
+};
+
+/* ─── Main Page ──────────────────────────────────────────────── */
+
 const SearchPage = () => {
-  const [query, setQuery] = useState("");
+  /* ── Existing state (unchanged) ─────────────────────────── */
+  const [query, setQuery]           = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
+  /* ── New autocomplete state ──────────────────────────────── */
+  const [debouncedQuery, setDebouncedQuery]             = useState("");
+  const [suggestions, setSuggestions]                   = useState([]);
+  const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError]         = useState(null);
+  const [showDropdown, setShowDropdown]                 = useState(false);
+
+  const searchWrapperRef = useRef(null);
+
+  /* ─────────────────────────────────────────────────────────
+     DEBOUNCE — 300ms timer, resets on every keystroke.
+     Clears immediately when the input is emptied.
+  ───────────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!query.trim()) {
+      setDebouncedQuery("");
+      setSuggestions([]);
+      setShowDropdown(false);
+      setSuggestionsError(null);
+      return;
+    }
+
+    const timerId = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+    }, 300);
+
+    return () => clearTimeout(timerId);
+  }, [query]);
+
+  /* ─────────────────────────────────────────────────────────
+     FETCH SUGGESTIONS — fires only when debouncedQuery settles
+     and is at least 2 characters long.
+  ───────────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!debouncedQuery || debouncedQuery.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      setIsSuggestionsLoading(true);
+      setSuggestionsError(null);
+      try {
+        const res = await fetchSuggestions(debouncedQuery);
+        if (!cancelled) {
+          setSuggestions(res.data?.data?.suggestions ?? []);
+          setShowDropdown(true);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setSuggestionsError(err);
+          setSuggestions([]);
+          setShowDropdown(true);
+        }
+      } finally {
+        if (!cancelled) setIsSuggestionsLoading(false);
+      }
+    };
+
+    load();
+    return () => { cancelled = true; };
+  }, [debouncedQuery]);
+
+  /* ─────────────────────────────────────────────────────────
+     CLICK OUTSIDE — closes dropdown
+  ───────────────────────────────────────────────────────── */
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (searchWrapperRef.current && !searchWrapperRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  /* ─────────────────────────────────────────────────────────
+     EXISTING FULL SEARCH QUERY (unchanged)
+  ───────────────────────────────────────────────────────── */
   const { data, isLoading } = useQuery({
     queryKey: ["search", searchTerm],
     queryFn: () => globalSearch(searchTerm),
@@ -41,14 +310,40 @@ const SearchPage = () => {
 
   const results = data?.data?.data;
 
+  /* ─────────────────────────────────────────────────────────
+     EXISTING FULL SEARCH HANDLER (unchanged)
+  ───────────────────────────────────────────────────────── */
   const handleSearch = (e) => {
     e.preventDefault();
-    if (query.trim()) setSearchTerm(query.trim());
+    if (query.trim()) {
+      setSearchTerm(query.trim());
+      setShowDropdown(false);
+    }
   };
+
+  /* ─────────────────────────────────────────────────────────
+     SUGGESTION CLICK — fill input + trigger full search
+  ───────────────────────────────────────────────────────── */
+  const handleSuggestionSelect = useCallback((label) => {
+    setQuery(label);
+    setSearchTerm(label);
+    setShowDropdown(false);
+    setSuggestions([]);
+  }, []);
+
+  /* ─────────────────────────────────────────────────────────
+     KEY HANDLER — Escape closes dropdown
+  ───────────────────────────────────────────────────────── */
+  const handleKeyDown = (e) => {
+    if (e.key === "Escape") setShowDropdown(false);
+  };
+
+  /* ───────────────────────────────────────────────────────── */
 
   return (
     <Layout>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
+
         {/* Header */}
         <div style={{ marginBottom: 28 }}>
           <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.8px", marginBottom: 4 }}>
@@ -61,23 +356,51 @@ const SearchPage = () => {
 
         {/* Search bar */}
         <form onSubmit={handleSearch} style={{ display: "flex", gap: 10, marginBottom: 32 }}>
-          <div style={{ flex: 1, position: "relative" }}>
-            <Search size={15} color="#484f58" style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
+          <div ref={searchWrapperRef} style={{ flex: 1, position: "relative" }}>
+            <Search
+              size={15}
+              color="#484f58"
+              style={{
+                position: "absolute", left: 14, top: "50%",
+                transform: "translateY(-50%)", pointerEvents: "none", zIndex: 1
+              }}
+            />
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search repositories, users, files, PRs..."
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (e.target.value.trim().length >= 2) setShowDropdown(true);
+              }}
+              onFocus={() => {
+                if (suggestions.length > 0 || isSuggestionsLoading) setShowDropdown(true);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Search repositories, users, files, PRs…"
+              autoComplete="off"
               style={{
                 width: "100%", background: "var(--bg-elevated)",
                 border: "1px solid var(--border-default)", borderRadius: 12,
                 paddingLeft: 42, paddingRight: 16, paddingTop: 12, paddingBottom: 12,
                 fontSize: 14, color: "var(--text-primary)", outline: "none",
-                transition: "border-color 0.15s, box-shadow 0.15s", fontFamily: "inherit", boxSizing: "border-box"
+                transition: "border-color 0.15s, box-shadow 0.15s",
+                fontFamily: "inherit", boxSizing: "border-box"
               }}
               onFocus={e => { e.target.style.borderColor = "#2563eb"; e.target.style.boxShadow = "0 0 0 3px rgba(37,99,235,0.2)"; }}
               onBlur={e => { e.target.style.borderColor = "var(--border-default)"; e.target.style.boxShadow = "none"; }}
             />
+
+            {/* Autocomplete Dropdown */}
+            {showDropdown && (
+              <SuggestionDropdown
+                suggestions={suggestions}
+                isLoading={isSuggestionsLoading}
+                error={suggestionsError}
+                query={query}
+                onSelect={handleSuggestionSelect}
+              />
+            )}
           </div>
+
           <button
             type="submit"
             disabled={!query.trim()}
@@ -96,6 +419,8 @@ const SearchPage = () => {
             Search
           </button>
         </form>
+
+        {/* ── Existing full-search results (completely unchanged) ── */}
 
         {isLoading && <Loader />}
 
@@ -290,6 +615,9 @@ const SearchPage = () => {
           </div>
         )}
       </div>
+
+      {/* Spin keyframe for loading spinner inside dropdown */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </Layout>
   );
 };

@@ -209,6 +209,136 @@ export const searchPullRequests = asyncHandler(async (req, res) => {
   );
 });
 
+/* ================= SEARCH SUGGESTIONS (lightweight autocomplete) ================= */
+export const searchSuggestions = asyncHandler(async (req, res) => {
+
+  const { q } = req.query;
+
+  /* Require at least 2 characters — avoids extremely broad queries */
+  if (!q || q.trim().length < 2) {
+    return res.status(200).json(
+      new ApiResponse(200, { suggestions: [], query: q || "" }, "No suggestions")
+    );
+  }
+
+  const trimmed = q.trim();
+
+  /* Run all 4 searches in parallel — 3 results each, minimal fields */
+  const [repos, users, files, prs] = await Promise.all([
+
+    /* Repos — name match only, skip content-heavy description */
+    Repository.find({
+      $and: [
+        { name: { $regex: trimmed, $options: "i" } },
+        {
+          $or: [
+            { visibility: "public" },
+            { owner: req.user._id },
+            { contributors: req.user._id }
+          ]
+        }
+      ]
+    })
+      .select("name visibility")
+      .limit(3)
+      .lean(),
+
+    /* Users — username + fullName match */
+    User.find({
+      $and: [
+        { isVerified: true },
+        {
+          $or: [
+            { username: { $regex: trimmed, $options: "i" } },
+            { fullName: { $regex: trimmed, $options: "i" } }
+          ]
+        }
+      ]
+    })
+      .select("username fullName")
+      .limit(3)
+      .lean(),
+
+    /* Files — name match only (no content search, very fast) */
+    File.find({ name: { $regex: trimmed, $options: "i" } })
+      .populate("repository", "name visibility owner contributors")
+      .select("name repository")
+      .limit(5) /* fetch 5 so we have room after access filtering */
+      .lean(),
+
+    /* PRs — message match */
+    PullRequest.find({ message: { $regex: trimmed, $options: "i" } })
+      .populate("repository", "name visibility owner contributors")
+      .select("message status repository")
+      .limit(5)
+      .lean()
+  ]);
+
+  /* Filter files from repos the user can't access */
+  const accessibleFiles = files
+    .filter((file) => {
+      const repo = file.repository;
+      if (!repo) return false;
+      if (repo.visibility === "public") return true;
+      if (repo.owner?.toString() === req.user._id.toString()) return true;
+      if (repo.contributors?.some(
+        (c) => c.toString() === req.user._id.toString()
+      )) return true;
+      return false;
+    })
+    .slice(0, 3);
+
+  /* Filter PRs from repos the user can't access */
+  const accessiblePRs = prs
+    .filter((pr) => {
+      const repo = pr.repository;
+      if (!repo) return false;
+      if (repo.visibility === "public") return true;
+      if (repo.owner?.toString() === req.user._id.toString()) return true;
+      if (repo.contributors?.some(
+        (c) => c.toString() === req.user._id.toString()
+      )) return true;
+      return false;
+    })
+    .slice(0, 3);
+
+  /* Map to a uniform lightweight shape: { _id, label, sublabel, type } */
+  const suggestions = [
+    ...repos.map((r) => ({
+      _id: r._id,
+      label: r.name,
+      sublabel: r.visibility,
+      type: "repository"
+    })),
+    ...users.map((u) => ({
+      _id: u._id,
+      label: u.username,
+      sublabel: u.fullName || "",
+      type: "user"
+    })),
+    ...accessibleFiles.map((f) => ({
+      _id: f._id,
+      label: f.name,
+      sublabel: f.repository?.name || "",
+      type: "file"
+    })),
+    ...accessiblePRs.map((pr) => ({
+      _id: pr._id,
+      label: pr.message,
+      sublabel: pr.repository?.name || "",
+      type: "pullRequest"
+    }))
+  ];
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      { suggestions, query: trimmed, total: suggestions.length },
+      "Suggestions fetched successfully"
+    )
+  );
+});
+
 /* ================= GLOBAL SEARCH ================= */
 export const globalSearch = asyncHandler(async (req, res) => {
 
