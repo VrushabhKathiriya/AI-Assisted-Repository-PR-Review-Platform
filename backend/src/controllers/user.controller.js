@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { OAuth2Client } from "google-auth-library";
 import { User } from "../models/user.model.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
@@ -8,6 +9,10 @@ import { sendOtpEmail } from "../utils/email.js";
 import { sendPhoneOtp } from "../utils/sms.js";
 import { sendResetPasswordEmail } from "../utils/email.js";
 import { generateOtp } from "../utils/generateOtp.js";
+
+/* Singleton Google OAuth2 client */
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
 
 /* ================= TOKEN UTILS ================= */
 const generateAccessAndRefreshTokens = async (userId) => {
@@ -240,6 +245,100 @@ export const loginUser = asyncHandler(async (req, res) => {
     sameSite: "strict"
   };
 
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, cookieOptions)
+    .cookie("refreshToken", refreshToken, cookieOptions)
+    .json(
+      new ApiResponse(
+        200,
+        { user: loggedInUser, accessToken },
+        "Login successful"
+      )
+    );
+});
+
+/* ================= GOOGLE LOGIN ================= */
+export const googleLogin = asyncHandler(async (req, res) => {
+
+  const { credential } = req.body;
+
+  if (!credential) {
+    throw new ApiError(400, "Google credential (ID token) is required");
+  }
+
+  /* ── 1. Verify Google ID token using google-auth-library ── */
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    payload = ticket.getPayload();
+  } catch {
+    throw new ApiError(401, "Invalid or expired Google token");
+  }
+
+  const { sub: googleId, email, name, picture, email_verified } = payload;
+
+  if (!email_verified) {
+    throw new ApiError(401, "Google account email is not verified");
+  }
+
+  /* ── 2. Try to find an existing Google user by googleId (stable identifier) ── */
+  let user = await User.findOne({ googleId });
+
+  if (!user) {
+    /* ── 3. Check whether the email belongs to a local account ── */
+    const existingByEmail = await User.findOne({ email });
+
+    if (existingByEmail && existingByEmail.authProvider !== "google") {
+      throw new ApiError(
+        409,
+        `An account with this email already exists. Please sign in with your ${existingByEmail.authProvider === "phone" ? "phone number" : "email and password"}.`
+      );
+    }
+
+    /* ── 4. Create a new Google user ── */
+
+    /* Generate a username from the email prefix, ensure it is unique */
+    const baseUsername = email
+      .split("@")[0]
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 20);
+
+    let username = baseUsername;
+    const taken = await User.findOne({ username });
+    if (taken) {
+      username = `${baseUsername}${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+
+    user = await User.create({
+      googleId,
+      email,
+      fullName: name || email.split("@")[0],
+      username,
+      authProvider: "google",
+      isVerified: true          /* Google-verified email — no OTP needed */
+    });
+  }
+
+  /* ── 5. Generate our own Access + Refresh tokens (EXISTING function) ── */
+  const { accessToken, refreshToken } =
+    await generateAccessAndRefreshTokens(user._id);
+
+  const loggedInUser = await User.findById(user._id)
+    .select("-password -refreshToken");
+
+  /* ── 6. Same cookie options as loginUser ── */
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict"
+  };
+
+  /* ── 7. Same response format as loginUser ── */
   return res
     .status(200)
     .cookie("accessToken", accessToken, cookieOptions)

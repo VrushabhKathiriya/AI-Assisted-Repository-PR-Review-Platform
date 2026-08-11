@@ -5,6 +5,7 @@ import {
   registerUser,
   verifyOtp,
   loginUser,
+  googleLogin,
   logoutUser,
   refreshAccessToken,
   getCurrentUser,
@@ -23,6 +24,7 @@ const router = Router();
 router.post("/register", registerUser);
 router.post("/verify-otp", verifyOtp);
 router.post("/login", loginUser);
+router.post("/google-login", googleLogin);
 
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password/:token", resetPassword);

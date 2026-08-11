@@ -41,14 +41,21 @@ const userSchema = new Schema(
       unique: true
     },
 
-    password: {
+    googleId: {
       type: String,
-      required: true
+      sparse: true,
+      unique: true,
+      default: null
+    },
+
+    password: {
+      type: String
+      /* Not required — Google users have no password */
     },
 
     authProvider: {
       type: String,
-      enum: ["email", "phone"],
+      enum: ["email", "phone", "google"],
       required: true
     },
 
@@ -78,7 +85,8 @@ const userSchema = new Schema(
 
 /* ---------- PASSWORD HASH ---------- */
 userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
+  /* Skip hashing if password is absent (Google users) or unchanged */
+  if (!this.password || !this.isModified("password")) return;
   this.password = await bcrypt.hash(this.password, 10);
 });
 

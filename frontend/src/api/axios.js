@@ -35,6 +35,7 @@ api.interceptors.response.use(
     // Skip refresh for auth endpoints to avoid infinite loops
     const isAuthEndpoint =
       originalRequest?.url?.includes("/users/login") ||
+      originalRequest?.url?.includes("/users/google-login") ||
       originalRequest?.url?.includes("/users/register") ||
       originalRequest?.url?.includes("/users/refresh-token") ||
       originalRequest?.url?.includes("/users/verify-otp");
