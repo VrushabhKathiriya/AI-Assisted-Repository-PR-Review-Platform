@@ -1,5 +1,7 @@
 import { Router } from "express";
 import verifyJWT from "../middlewares/auth.middleware.js";
+import { loginRateLimiter, registerRateLimiter, forgotPasswordRateLimiter } from "../middlewares/rateLimit.middleware.js";
+import { loginSlidingRateLimiter, registerSlidingRateLimiter, forgotPasswordSlidingRateLimiter } from "../middlewares/rateLimit.middleware.js";
 
 import {
   registerUser,
@@ -21,12 +23,15 @@ const router = Router();
 
 /* ================= PUBLIC ROUTES ================= */
 
-router.post("/register", registerUser);
+//router.post("/register",registerRateLimiter,registerUser);
+router.post("/register",registerSlidingRateLimiter,registerUser);
 router.post("/verify-otp", verifyOtp);
-router.post("/login", loginUser);
+//router.post("/login",loginRateLimiter,loginUser);
+router.post("/login",loginSlidingRateLimiter,loginUser);
 router.post("/google-login", googleLogin);
 
-router.post("/forgot-password", forgotPassword);
+//router.post("/forgot-password", forgotPasswordRateLimiter, forgotPassword);
+router.post("/forgot-password", forgotPasswordSlidingRateLimiter, forgotPassword);
 router.post("/reset-password/:token", resetPassword);
 
 router.post("/refresh-token", refreshAccessToken);

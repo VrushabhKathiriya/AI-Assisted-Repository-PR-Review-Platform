@@ -7,10 +7,12 @@ import {
   getPullRequests
 } from "../controllers/pullRequest.controller.js";
 
+import { aiReviewSlidingRateLimiter } from "../middlewares/rateLimit.middleware.js"
+
 const router = express.Router();
 
 /* ---------- CREATE PR ---------- */
-router.post("/file/:fileId", verifyJWT, createPullRequest);
+router.post("/file/:fileId", verifyJWT, aiReviewSlidingRateLimiter,createPullRequest);
 
 /* ---------- REVIEW PR ---------- */
 router.patch("/:prId/review", verifyJWT, reviewPullRequest);

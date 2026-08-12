@@ -9,10 +9,14 @@ import {
   searchSuggestions
 } from "../controllers/search.controller.js";
 
+//import { searchRateLimiter } from "../middlewares/rateLimit.middleware.js";
+import { searchSlidingRateLimiter } from "../middlewares/rateLimit.middleware.js";
+
 const router = express.Router();
 
 /* ---------- AUTOCOMPLETE SUGGESTIONS ---------- */
-router.get("/suggestions", verifyJWT, searchSuggestions);
+//router.get("/suggestions", verifyJWT, searchRateLimiter, searchSuggestions);
+router.get("/suggestions", verifyJWT, searchSlidingRateLimiter, searchSuggestions);
 
 /* ---------- GLOBAL SEARCH ---------- */
 router.get("/", verifyJWT, globalSearch);
