@@ -21,7 +21,10 @@ const CreatePRPage = () => {
   const { mutate, isPending } = useMutation({
     mutationFn: () => createPR(fileId, form),
     onSuccess: (res) => {
-      toast.success("PR created and AI reviewed!");
+      // The PR is created. The AI review is queued in the background.
+      // We do NOT say "AI reviewed!" here because Gemini hasn't run yet.
+      // The user will see the live status on the PRDetailPage via polling.
+      toast.success("PR submitted! AI review is running in the background.");
       const prId = res.data.data._id;
       navigate(`/repos/${repoId}/prs/${prId}`);
     },

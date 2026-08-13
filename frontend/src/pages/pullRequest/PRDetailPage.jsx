@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getPRsByRepo, reviewPR } from "../../api/pullRequest.api.js";
+import { getPRsByRepo, reviewPR, getAIReviewStatus } from "../../api/pullRequest.api.js";
 import { getRepoById } from "../../api/repository.api.js";
 import { getComments, addComment, deleteComment } from "../../api/comment.api.js";
 import Layout from "../../components/common/Layout.jsx";
@@ -10,11 +10,12 @@ import { getPRStatusColor, getAIStatusColor, getIssueTypeColor } from "../../uti
 import { timeAgo } from "../../utils/formatDate.js";
 import useAuthStore from "../../store/auth.store.js";
 import toast from "react-hot-toast";
+import AIReviewTracker from "../../components/pullRequest/AIReviewTracker.jsx";
 import {
   GitPullRequest, CheckCircle, XCircle,
-  Sparkles, Shield, MessageSquare,
-  Send, Trash2, AlertTriangle, Info,
-  Lightbulb, ChevronDown, ChevronUp, Clock
+  Shield, MessageSquare,
+  Send, Trash2, AlertTriangle,
+  ChevronDown, ChevronUp, Clock
 } from "lucide-react";
 
 const S = {
@@ -51,6 +52,45 @@ const PRDetailPage = () => {
   const { data: repoData } = useQuery({ queryKey: ["repo", repoId], queryFn: () => getRepoById(repoId) });
   const { data: commentsData } = useQuery({ queryKey: ["comments", prId], queryFn: () => getComments(prId) });
 
+  /*
+    POLLING QUERY — How it works:
+    ─────────────────────────────────────────────────────────
+    React Query's `refetchInterval` makes this query re-run
+    automatically on a timer.
+
+    We pass a FUNCTION to refetchInterval (not just a number).
+    That function receives the latest cached data and can:
+      - Return 3000 (ms) → keep polling every 3 seconds
+      - Return false      → STOP polling
+
+    We stop polling when status is "completed" or "failed"
+    because those are terminal states — the worker is done.
+
+    WHY 3000ms?
+    Fast enough to feel live, slow enough not to hammer the server.
+    This is a simple learning project. In production you might
+    use exponential backoff or WebSockets.
+  */
+  const terminalStatuses = ["completed", "failed"];
+
+  const { data: aiStatusData } = useQuery({
+    queryKey: ["ai-review-status", prId],
+    queryFn: () => getAIReviewStatus(prId),
+    // Only start polling once we have the prId
+    enabled: !!prId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.data?.data?.aiReviewStatus;
+      // If we've reached a terminal state, stop polling
+      if (terminalStatuses.includes(status)) return false;
+      // Otherwise keep asking every 3 seconds
+      return 3000;
+    },
+  });
+
+  // Extract the two values we care about from the polling response
+  const aiReviewStatus = aiStatusData?.data?.data?.aiReviewStatus;
+  const aiResult = aiStatusData?.data?.data?.aiResult;
+
   const pr = prsData?.data?.data?.find((p) => p._id === prId);
   const repo = repoData?.data?.data;
   const comments = commentsData?.data?.data?.comments || [];
@@ -80,7 +120,6 @@ const PRDetailPage = () => {
   if (!pr) return <Layout><p style={{ color: "var(--text-secondary)" }}>PR not found</p></Layout>;
 
   const badge = prBadge(pr.status);
-  const issueIcons = { critical: AlertTriangle, warning: AlertTriangle, suggestion: Lightbulb };
 
   return (
     <Layout>
@@ -281,86 +320,29 @@ const PRDetailPage = () => {
           </div>
         </div>
 
-        {/* Right — AI Review + Rule Check */}
+        {/* Right — AI Review Tracker + Rule Check */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* AI Review */}
-          <div style={S.card}>
-            <div style={{ ...S.sectionTitle, justifyContent: "space-between" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Sparkles size={14} color="#a78bfa" />
-                <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>AI Review</h2>
-              </div>
-              <span style={{
-                fontSize: 10, fontWeight: 700, letterSpacing: "0.5px",
-                padding: "3px 8px", borderRadius: 99,
-                background: "rgba(124,58,237,0.1)", color: "#a78bfa", border: "1px solid rgba(124,58,237,0.2)"
-              }}>
-                {pr.aiResult?.status?.toUpperCase()}
-              </span>
-            </div>
+          {/*
+            AIReviewTracker — the live polling UI.
 
-            <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
-              {pr.aiResult?.summary && (
-                <div style={{
-                  padding: "12px 14px", background: "rgba(13,17,23,0.6)",
-                  borderRadius: 10, border: "1px solid var(--border-subtle)"
-                }}>
-                  <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>Summary</p>
-                  <p style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.6 }}>{pr.aiResult.summary}</p>
-                </div>
-              )}
+            WHY we pass aiReviewStatus and aiResult from the polling
+            query (not from pr.aiReviewStatus / pr.aiResult):
 
-              {pr.aiResult?.issues?.length > 0 && (
-                <div>
-                  <p style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.8px" }}>Issues</p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {pr.aiResult.issues.map((issue, i) => {
-                      const Icon = issueIcons[issue.type] || Info;
-                      const b = issueBadge(issue.type);
-                      return (
-                        <div key={i} style={{
-                          padding: "12px 14px", borderRadius: 10,
-                          background: b.bg, border: `1px solid ${b.border}`
-                        }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, color: b.color }}>
-                            <Icon size={13} />
-                            <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>{issue.type}</span>
-                          </div>
-                          <p style={{ fontSize: 12, fontWeight: 600, color: b.color, marginBottom: 4 }}>{issue.issue}</p>
-                          <p style={{ fontSize: 11, color: b.color, opacity: 0.8, marginBottom: 4 }}>{issue.why}</p>
-                          <p style={{ fontSize: 11, color: b.color, opacity: 0.7 }}>Fix: {issue.fix}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+            The `pr` object comes from the getPRsByRepo query which
+            only runs once when the page loads. It gives us a
+            snapshot — it won't update on its own.
 
-              {pr.aiResult?.improvements?.length > 0 && (
-                <div>
-                  <p style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.8px" }}>Improvements</p>
-                  <ul style={{ display: "flex", flexDirection: "column", gap: 6, listStyle: "none", padding: 0, margin: 0 }}>
-                    {pr.aiResult.improvements.map((imp, i) => (
-                      <li key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#c9d1d9" }}>
-                        <span style={{ color: "#60a5fa", flexShrink: 0 }}>→</span>
-                        {imp}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+            The aiStatusData comes from the polling query which
+            re-runs every 3 seconds. It stays fresh and live.
 
-              {pr.aiResult?.commitMessageFeedback && (
-                <div style={{
-                  padding: "12px 14px", borderRadius: 10,
-                  background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)"
-                }}>
-                  <p style={{ fontSize: 11, fontWeight: 600, color: "#fbbf24", marginBottom: 4 }}>Commit Message Feedback</p>
-                  <p style={{ fontSize: 12, color: "#c9d1d9" }}>{pr.aiResult.commitMessageFeedback}</p>
-                </div>
-              )}
-            </div>
-          </div>
+            By separating these two queries, we keep the main PR
+            query simple and let the polling query handle only
+            the status updates it needs to track.
+          */}
+          <AIReviewTracker
+            aiReviewStatus={aiReviewStatus}
+            aiResult={aiResult}
+          />
 
           {/* Rule Check */}
           <div style={S.card}>

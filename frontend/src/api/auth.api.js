@@ -12,4 +12,4 @@ export const addEmail = (data) => api.post("/users/add-email", data);
 export const verifyProfileEmail = (data) => api.post("/users/verify-profile-email", data);
 export const forgotPassword = (data) => api.post("/users/forgot-password", data);
 export const resetPassword = (token, data) => api.post(`/users/reset-password/${token}`, data);
-export const refreshToken = () => api.post("/users/refresh-token");
+export const refreshToken = () => api.post("/users/refresh-token");

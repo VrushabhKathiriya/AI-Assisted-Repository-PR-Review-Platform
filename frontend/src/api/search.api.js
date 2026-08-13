@@ -7,4 +7,4 @@ export const searchFiles = (q, repoId) => api.get(`/search/files?q=${q}${repoId 
 export const searchPRs = (q, status, repoId) => api.get(`/search/prs?${q ? `q=${q}` : ""}${status ? `&status=${status}` : ""}${repoId ? `&repoId=${repoId}` : ""}`);
 
 /* Lightweight autocomplete — returns max ~12 suggestions across all types */
-export const fetchSuggestions = (q) => api.get(`/search/suggestions?q=${encodeURIComponent(q)}`);
+export const fetchSuggestions = (q) => api.get(`/search/suggestions?q=${encodeURIComponent(q)}`);

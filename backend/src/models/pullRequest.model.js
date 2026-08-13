@@ -98,10 +98,20 @@ const pullRequestSchema = new Schema(
       required: true
     },
 
+    /* ---------- AI REVIEW ---------- */
+
     aiResult: {
       type: aiResultSchema,
-      required: true
+      default: null
     },
+
+    aiReviewStatus: {
+      type: String,
+      enum: ["pending", "processing", "retrying", "completed", "failed"],
+      default: "pending"
+    },
+
+    /* ---------- PR STATUS ---------- */
 
     status: {
       type: String,
@@ -125,4 +135,7 @@ const pullRequestSchema = new Schema(
 pullRequestSchema.index({ repository: 1, status: 1 });
 pullRequestSchema.index({ file: 1 });
 
-export const PullRequest = mongoose.model("PullRequest", pullRequestSchema);
+export const PullRequest = mongoose.model(
+  "PullRequest",
+  pullRequestSchema
+);

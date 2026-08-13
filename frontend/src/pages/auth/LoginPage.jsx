@@ -36,7 +36,7 @@ const LoginPage = () => {
   const [googleHover, setGoogleHover] = useState(false);
   const gisInitialized = useRef(false);
 
-  /* ── Existing email/password login (unchanged) ─────────── */
+  /* ── Existing email/password login ─────────── */
   const { mutate, isPending } = useMutation({
     mutationFn: login,
     onSuccess: (res) => {
@@ -158,7 +158,8 @@ const LoginPage = () => {
         notification.isSkippedMoment()
       ) {
         /*
-         * One Tap was suppressed. Fall back to the popup flow by
+         * One Tap was suppressed (e.g. user dismissed it too many times,
+         * or cookies are blocked). Fall back to the popup flow by
          * rendering a temporary off-screen button and clicking it.
          */
         const tempDiv = document.createElement("div");
