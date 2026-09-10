@@ -64,8 +64,9 @@ const statusToStepIndex = {
    - future (after current): grey hollow dot
 ───────────────────────────────────────────────────────────── */
 const StepDot = ({ stepIndex, currentIndex, status }) => {
-  const isDone = stepIndex < currentIndex;
-  const isCurrent = stepIndex === currentIndex;
+  // When "completed", ALL steps including the last one should show green tick
+  const isDone = stepIndex < currentIndex || (status === "completed" && stepIndex === currentIndex);
+  const isCurrent = stepIndex === currentIndex && status !== "completed";
 
   // Steps before the current one are "done" → green
   if (isDone) {
@@ -258,8 +259,8 @@ const AIReviewTracker = ({ aiReviewStatus, aiResult }) => {
           grey otherwise.
         */}
         {STEPS.map((step, i) => {
-          const isDone = i < currentIndex;
-          const isCurrent = i === currentIndex;
+          const isDone = i < currentIndex || (aiReviewStatus === "completed" && i === currentIndex);
+          const isCurrent = i === currentIndex && aiReviewStatus !== "completed";
 
           /* Determine the label text colour for this step */
           let labelColor = "var(--text-muted)"; // future steps
