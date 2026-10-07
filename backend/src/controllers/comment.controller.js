@@ -6,6 +6,10 @@ import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { createNotification } from "../utils/createNotification.js";
 import { createActivity } from "../utils/createActivity.js";
+import mongoose from "mongoose";
+// KAFKA OUTBOX: save event intent to MongoDB instead of calling Kafka directly
+import { Outbox } from "../kafka/outbox/outbox.model.js";
+import { TOPICS, EVENTS } from "../kafka/topics.js";
 
 /* ================= ADD COMMENT ================= */
 export const addComment = asyncHandler(async (req, res) => {
@@ -48,12 +52,62 @@ export const addComment = asyncHandler(async (req, res) => {
   }
 
   /* ---------- CREATE COMMENT ---------- */
-  const comment = await Comment.create({
-    pullRequest: prId,
-    repository: pr.repository,
-    author: req.user._id,
-    content: content.trim()
-  });
+  // const comment = await Comment.create({
+  //   pullRequest: prId,
+  //   repository: pr.repository,
+  //   author: req.user._id,
+  //   content: content.trim()
+  // });
+
+   /* ---------- CREATE COMMENT + OUTBOX (atomic transaction) ----------
+     Why transaction?
+       Comment.create() ✅ → app crashes → Outbox.create() ❌
+       Result: comment saved but PR creator never notified.
+     With transaction: both succeed or both rollback.
+  ------------------------------------------------ */
+  const commentSession = await mongoose.startSession();
+  commentSession.startTransaction();
+  let comment;
+  try {
+    /* DB write 1: create comment */
+    const [createdComment] = await Comment.create(
+      [
+        {
+          pullRequest: prId,
+          repository: pr.repository,
+          author: req.user._id,
+          content: content.trim()
+        }
+      ],
+      { session: commentSession }
+    );
+    comment = createdComment;
+    /* DB write 2: save notification event intent to Outbox */
+    // OLD: await createNotification({ recipient: pr.createdBy, type: "comment_added", ... });
+    await Outbox.create(
+      [
+        {
+          topic:     TOPICS.PR_LIFECYCLE_EVENTS,
+          eventType: EVENTS.COMMENT_ADDED,
+          payload:   {
+            prCreatorId:       pr.createdBy.toString(),
+            commenterId:       req.user._id.toString(),
+            commenterUsername: req.user.username,
+            prId:              pr._id.toString(),
+            repoId:            pr.repository.toString(),
+            commentId:         createdComment._id.toString()
+          }
+        }
+      ],
+      { session: commentSession }
+    );
+    await commentSession.commitTransaction();
+  } catch (error) {
+    await commentSession.abortTransaction();
+    throw error;
+  } finally {
+    commentSession.endSession();
+  }
 
   const populatedComment = await Comment.findById(comment._id)
     .populate("author", "username email");
@@ -69,15 +123,15 @@ export const addComment = asyncHandler(async (req, res) => {
   });
 
   /* ---------- NOTIFICATION ---------- */
-  await createNotification({
-    recipient: pr.createdBy,
-    sender: req.user._id,
-    type: "comment_added",
-    message: `${req.user.username} commented on your PR`,
-    repository: pr.repository,
-    pullRequest: pr._id,
-    comment: comment._id
-  });
+  // await createNotification({
+  //   recipient: pr.createdBy,
+  //   sender: req.user._id,
+  //   type: "comment_added",
+  //   message: `${req.user.username} commented on your PR`,
+  //   repository: pr.repository,
+  //   pullRequest: pr._id,
+  //   comment: comment._id
+  // });
 
   return res.status(201).json(
     new ApiResponse(

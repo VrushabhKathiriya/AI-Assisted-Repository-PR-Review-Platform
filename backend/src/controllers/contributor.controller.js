@@ -7,7 +7,12 @@ import { createNotification } from "../utils/createNotification.js";
 import { createActivity } from "../utils/createActivity.js";
 import { sendInvitationEmail } from "../utils/email.js";
 import { Invitation } from "../models/invitation.model.js";
+import { Notification } from "../models/notification.model.js";
 import crypto from "crypto";
+import mongoose from "mongoose";
+// KAFKA OUTBOX
+import { Outbox } from "../kafka/outbox/outbox.model.js";         
+import { TOPICS, EVENTS } from "../kafka/topics.js";              
 
 /* ================= INVITE CONTRIBUTOR BY USERNAME ================= */
 export const inviteContributor = asyncHandler(async (req, res) => {
@@ -202,18 +207,49 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
 
   /* ---------- ADD AS CONTRIBUTOR ---------- */
   repository.contributors.push(req.user._id);
-  await repository.save();
-
+  
   /* ---------- UPDATE INVITATION STATUS ---------- */
   invitation.status = "accepted";
-  await invitation.save();
 
-  /* ---------- CLEAR INVITATION TOKEN FROM NOTIFICATION (hides Accept/Decline buttons) ---------- */
-  const { Notification } = await import("../models/notification.model.js");
-  await Notification.updateMany(
-    { recipient: req.user._id, invitationToken: token },
-    { $set: { invitationToken: null, isRead: true } }
-  );
+  
+  const acceptSession = await mongoose.startSession();
+  acceptSession.startTransaction();
+  try {
+    /* DB write 1: add contributor to repo */
+    await repository.save({ session: acceptSession });
+    /* DB write 2: mark invitation as accepted */
+    await invitation.save({ session: acceptSession });
+    /* DB write 3: clear invitation token from in-app notification */
+    await Notification.updateMany(
+      { recipient: req.user._id, invitationToken: token },
+      { $set: { invitationToken: null, isRead: true } },
+      { session: acceptSession }
+    );
+    /* DB write 4: Outbox event → notify repo owner */
+    // OLD: await createNotification({ recipient: repository.owner, type: "contributor_added", ... });
+    await Outbox.create(
+      [
+        {
+          topic:     TOPICS.PR_LIFECYCLE_EVENTS,
+          eventType: EVENTS.INVITATION_ACCEPTED,
+          payload:   {
+            repoOwnerId:          repository.owner.toString(),    // who gets notified
+            acceptedByUserId:     req.user._id.toString(),
+            acceptedByUsername:   req.user.username,
+            repoId:               repository._id.toString(),
+            repoName:             repository.name
+          }
+        }
+      ],
+      { session: acceptSession }
+    );
+    await acceptSession.commitTransaction();
+  } catch (error) {
+    await acceptSession.abortTransaction();
+    throw error;
+  } finally {
+    acceptSession.endSession();
+  }
 
   /* ---------- ACTIVITY (deduplicated) ---------- */
   const { Activity } = await import("../models/activity.model.js");
@@ -236,13 +272,13 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
   }
 
   /* ---------- NOTIFY OWNER ---------- */
-  await createNotification({
-    recipient: repository.owner,
-    sender: req.user._id,
-    type: "contributor_added",
-    message: `${req.user.username} accepted your invitation to ${repository.name}`,
-    repository: repository._id
-  });
+  // await createNotification({
+  //   recipient: repository.owner,
+  //   sender: req.user._id,
+  //   type: "contributor_added",
+  //   message: `${req.user.username} accepted your invitation to ${repository.name}`,
+  //   repository: repository._id
+  // });
 
   const updatedRepo = await Repository.findById(repository._id)
     .populate("owner", "username email")
@@ -289,25 +325,46 @@ export const declineInvitation = asyncHandler(async (req, res) => {
   }
 
   invitation.status = "declined";
-  await invitation.save();
-
-  /* ---------- CLEAR INVITATION TOKEN FROM NOTIFICATION (hides Accept/Decline buttons) ---------- */
-  const { Notification } = await import("../models/notification.model.js");
-  await Notification.updateMany(
-    { recipient: req.user._id, invitationToken: token },
-    { $set: { invitationToken: null, isRead: true } }
-  );
 
   /* ---------- NOTIFY OWNER ---------- */
   const repository = await Repository.findById(invitation.repository);
-
-  await createNotification({
-    recipient: invitation.invitedBy,
-    sender: req.user._id,
-    type: "contributor_removed",
-    message: `${req.user.username} declined your invitation to ${repository?.name}`,
-    repository: invitation.repository
-  });
+  
+  const declineSession = await mongoose.startSession();
+  declineSession.startTransaction();
+  try {
+    /* DB write 1: mark invitation as declined */
+    await invitation.save({ session: declineSession });
+    /* DB write 2: clear invitation token from in-app notification */
+    await Notification.updateMany(
+      { recipient: req.user._id, invitationToken: token },
+      { $set: { invitationToken: null, isRead: true } },
+      { session: declineSession }
+    );
+    /* DB write 3: Outbox event → notify repo owner */
+    //  OLD: await createNotification({ recipient: invitation.invitedBy, type: "contributor_removed", ... });
+    await Outbox.create(
+      [
+        {
+          topic:     TOPICS.PR_LIFECYCLE_EVENTS,
+          eventType: EVENTS.INVITATION_DECLINED,
+          payload:   {
+            repoOwnerId:          invitation.invitedBy.toString(),  // who gets notified
+            declinedByUserId:     req.user._id.toString(),
+            declinedByUsername:   req.user.username,
+            repoId:               invitation.repository.toString(),
+            repoName:             repository?.name
+          }
+        }
+      ],
+      { session: declineSession }
+    );
+    await declineSession.commitTransaction();
+  } catch (error) {
+    await declineSession.abortTransaction();
+    throw error;
+  } finally {
+    declineSession.endSession();
+  }
 
   return res.status(200).json(
     new ApiResponse(200, null, "Invitation declined successfully")
